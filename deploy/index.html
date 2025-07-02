@@ -30,7 +30,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 120px 20px 160px 20px;
+            padding: 140px 20px 160px 20px;
         }
         
         .avatar {
@@ -201,7 +201,7 @@
         /* Mobile specific adjustments */
         @media (max-width: 768px) {
             #root {
-                padding: 120px 20px 180px 20px;
+                padding: 160px 20px 180px 20px;
             }
             
             .ui-overlay {
@@ -260,7 +260,7 @@
         /* Small mobile devices */
         @media (max-width: 480px) {
             #root {
-                padding: 140px 20px 220px 20px;
+                padding: 180px 20px 220px 20px;
             }
             
             .ui-overlay {
@@ -657,12 +657,42 @@
             document.getElementById('voiceBtn').disabled = false;
             setAvatarState('active');
             
-            // No automatic speech - just activate quietly
+            // Initialize audio context for mobile - required for iOS
+            initMobileAudio();
             
             setTimeout(() => {
                 setAvatarState('idle');
             }, 2000);
         });
+        
+        // Initialize audio for mobile devices
+        function initMobileAudio() {
+            // Create and play silent audio to unlock audio context on mobile
+            if ('speechSynthesis' in window) {
+                // Test speech synthesis to unlock it
+                const silentUtterance = new SpeechSynthesisUtterance(' ');
+                silentUtterance.volume = 0;
+                speechSynthesis.speak(silentUtterance);
+            }
+            
+            // Create silent audio context
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                gainNode.gain.value = 0;
+                oscillator.frequency.value = 440;
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.01);
+                
+                console.log('Mobile audio initialized');
+            } catch (e) {
+                console.log('Audio context initialization failed:', e);
+            }
+        }
         
         // Send message
         document.getElementById('sendBtn').addEventListener('click', async () => {
@@ -739,10 +769,41 @@
                             status.textContent = 'Speaking...';
                             setAvatarState('speaking');
                             
-                            audio.play().catch(error => {
-                                console.error('Audio play failed:', error);
-                                fallbackToTextDisplay();
-                            });
+                            // Enhanced mobile audio playback
+                            const playAudio = async () => {
+                                try {
+                                    // For mobile devices, ensure audio is user-initiated
+                                    await audio.play();
+                                } catch (error) {
+                                    console.error('Audio play failed:', error);
+                                    
+                                    // Try alternative audio approach for mobile
+                                    if (/iPad|iPhone|iPod|Android/i.test(navigator.userAgent)) {
+                                        console.log('Attempting mobile audio fallback');
+                                        // Create new audio element with different approach
+                                        const mobileAudio = new Audio();
+                                        mobileAudio.src = audioUrl;
+                                        mobileAudio.load();
+                                        
+                                        // Set mobile-friendly attributes
+                                        mobileAudio.preload = 'auto';
+                                        mobileAudio.volume = 1.0;
+                                        
+                                        try {
+                                            await mobileAudio.play();
+                                            mobileAudio.onended = audio.onended;
+                                            mobileAudio.onerror = audio.onerror;
+                                        } catch (mobileError) {
+                                            console.error('Mobile audio failed:', mobileError);
+                                            fallbackToTextDisplay();
+                                        }
+                                    } else {
+                                        fallbackToTextDisplay();
+                                    }
+                                }
+                            };
+                            
+                            playAudio();
                             
                             audio.onended = () => {
                                 status.textContent = 'Ready';
@@ -771,8 +832,10 @@
                                 if ('speechSynthesis' in window) {
                                     const utterance = new SpeechSynthesisUtterance(audioData.text);
                                     
-                                    // Set male voice - prioritize Eddy on macOS
+                                    // Set male voice - prioritize mobile-friendly options
                                     const voices = speechSynthesis.getVoices();
+                                    console.log('Available voices:', voices.map(v => `${v.name} (${v.lang})`));
+                                    
                                     const maleVoice = voices.find(voice => 
                                         voice.name.toLowerCase().includes('eddy') ||         // Preferred male voice on Mac
                                         voice.name.toLowerCase().includes('fred') ||        // Deep male voice on Mac
@@ -782,6 +845,8 @@
                                         voice.name.toLowerCase().includes('richard') ||     // Windows male
                                         voice.name.toLowerCase().includes('google uk english male') ||
                                         voice.name.toLowerCase().includes('google us english male') ||
+                                        voice.name.toLowerCase().includes('albert') ||      // Android male
+                                        voice.name.toLowerCase().includes('alex') ||        // iOS male  
                                         (voice.lang.startsWith('en') && voice.gender === 'male')
                                     );
                                     
@@ -789,12 +854,13 @@
                                         utterance.voice = maleVoice;
                                         console.log('Using male voice:', maleVoice.name);
                                     } else {
-                                        console.log('No specific male voice found, using default');
+                                        console.log('No specific male voice found, using default. Available:', voices.length);
                                     }
                                     
-                                    utterance.rate = 0.85; // Slightly slower for deeper sound
-                                    utterance.pitch = 0.6; // Much lower pitch for masculine sound
-                                    utterance.volume = 0.8;
+                                    // Mobile-optimized settings
+                                    utterance.rate = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.9 : 0.85;
+                                    utterance.pitch = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.8 : 0.6;
+                                    utterance.volume = 1.0; // Max volume for mobile
                                     
                                     utterance.onend = () => {
                                         status.textContent = 'Ready';
