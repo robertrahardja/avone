@@ -96,11 +96,20 @@ app.post('/api/chat', async (req, res) => {
 // Text-to-speech endpoint
 app.post('/api/speak', async (req, res) => {
     try {
-        const { text } = req.body;
+        const { text, voice, voiceId, VoiceId, gender } = req.body;
         
         if (!text) {
             return res.status(400).json({ error: 'Text is required' });
         }
+        
+        // Determine voice to use (prioritize male voices)
+        let selectedVoice = 'Matthew'; // Default male voice
+        
+        if (voice) selectedVoice = voice;
+        if (voiceId) selectedVoice = voiceId;
+        if (VoiceId) selectedVoice = VoiceId;
+        
+        console.log(`🎤 Using AWS Polly voice: ${selectedVoice} (gender: ${gender || 'male'})`);
         
         // Try AWS Polly first
         if (pollyClient) {
@@ -108,7 +117,7 @@ app.post('/api/speak', async (req, res) => {
                 const params = {
                     Text: text,
                     OutputFormat: 'mp3',
-                    VoiceId: 'Joanna',
+                    VoiceId: selectedVoice,
                     Engine: 'neural'
                 };
                 
@@ -128,7 +137,7 @@ app.post('/api/speak', async (req, res) => {
                     });
                     
                     res.send(audioBuffer);
-                    console.log('✅ AWS Polly audio generated');
+                    console.log(`✅ AWS Polly audio generated with ${selectedVoice} voice`);
                     return;
                 }
             } catch (pollyError) {
