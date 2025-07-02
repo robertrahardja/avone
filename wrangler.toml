@@ -1,0 +1,15 @@
+name = "ai-avatar-worker"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[env.production]
+name = "ai-avatar-worker"
+
+# Environment variables (set these via Cloudflare dashboard or wrangler CLI)
+# wrangler secret put OPENAI_API_KEY
+# wrangler secret put AWS_ACCESS_KEY_ID  
+# wrangler secret put AWS_SECRET_ACCESS_KEY
+# wrangler secret put AWS_REGION
+
+[[env.production.vars]]
+AWS_REGION = "us-east-1"
