@@ -180,6 +180,14 @@
             document.getElementById('voiceBtn').disabled = false;
             setAvatarState('active');
             
+            // Test audio permissions by playing a short test
+            if ('speechSynthesis' in window) {
+                const testUtterance = new SpeechSynthesisUtterance('Hello! I am ready to chat.');
+                testUtterance.volume = 0.5;
+                testUtterance.rate = 0.9;
+                speechSynthesis.speak(testUtterance);
+            }
+            
             setTimeout(() => {
                 setAvatarState('idle');
             }, 2000);
@@ -219,22 +227,115 @@
                 const aiResponse = data.response;
                 
                 // Show response
-                status.textContent = 'Speaking...';
                 responseDisplay.textContent = aiResponse;
                 responseDisplay.style.display = 'block';
-                setAvatarState('speaking');
                 
-                // Simulate speaking duration
-                const speakingTime = Math.max(2000, aiResponse.length * 50);
-                
-                setTimeout(() => {
-                    status.textContent = 'Ready';
-                    setAvatarState('idle');
+                // Try to generate speech with AWS Polly
+                try {
+                    status.textContent = 'Generating speech...';
+                    const audioResponse = await fetch('/api/speak', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ text: aiResponse })
+                    });
                     
+                    if (audioResponse.ok) {
+                        const contentType = audioResponse.headers.get('content-type');
+                        
+                        // Check if it's audio (AWS Polly) or JSON (browser TTS instruction)
+                        if (contentType && contentType.includes('audio')) {
+                            console.log('Playing AWS Polly audio');
+                            const audioBlob = await audioResponse.blob();
+                            const audioUrl = URL.createObjectURL(audioBlob);
+                            const audio = new Audio(audioUrl);
+                            
+                            status.textContent = 'Speaking...';
+                            setAvatarState('speaking');
+                            
+                            audio.play().catch(error => {
+                                console.error('Audio play failed:', error);
+                                fallbackToTextDisplay();
+                            });
+                            
+                            audio.onended = () => {
+                                status.textContent = 'Ready';
+                                setAvatarState('idle');
+                                URL.revokeObjectURL(audioUrl);
+                                
+                                setTimeout(() => {
+                                    responseDisplay.style.display = 'none';
+                                }, 3000);
+                            };
+                            
+                            audio.onerror = () => {
+                                console.error('Audio playback failed');
+                                fallbackToTextDisplay();
+                            };
+                            
+                        } else {
+                            // Handle browser TTS fallback
+                            const audioData = await audioResponse.json();
+                            
+                            if (audioData.useBrowserTTS) {
+                                console.log('Using browser Speech Synthesis API');
+                                status.textContent = 'Speaking...';
+                                setAvatarState('speaking');
+                                
+                                if ('speechSynthesis' in window) {
+                                    const utterance = new SpeechSynthesisUtterance(audioData.text);
+                                    utterance.rate = 0.9;
+                                    utterance.pitch = 1.0;
+                                    utterance.volume = 0.8;
+                                    
+                                    utterance.onend = () => {
+                                        status.textContent = 'Ready';
+                                        setAvatarState('idle');
+                                        
+                                        setTimeout(() => {
+                                            responseDisplay.style.display = 'none';
+                                        }, 3000);
+                                    };
+                                    
+                                    utterance.onerror = () => {
+                                        console.error('Browser TTS failed');
+                                        fallbackToTextDisplay();
+                                    };
+                                    
+                                    speechSynthesis.speak(utterance);
+                                } else {
+                                    fallbackToTextDisplay();
+                                }
+                            } else {
+                                fallbackToTextDisplay();
+                            }
+                        }
+                        
+                    } else {
+                        console.log('TTS not available, showing text only');
+                        fallbackToTextDisplay();
+                    }
+                    
+                } catch (ttsError) {
+                    console.error('TTS error:', ttsError);
+                    fallbackToTextDisplay();
+                }
+                
+                function fallbackToTextDisplay() {
+                    status.textContent = 'Speaking...';
+                    setAvatarState('speaking');
+                    
+                    const speakingTime = Math.max(2000, aiResponse.length * 50);
                     setTimeout(() => {
-                        responseDisplay.style.display = 'none';
-                    }, 3000);
-                }, speakingTime);
+                        status.textContent = 'Ready';
+                        setAvatarState('idle');
+                        
+                        setTimeout(() => {
+                            responseDisplay.style.display = 'none';
+                        }, 3000);
+                    }, speakingTime);
+                }
                 
             } catch (error) {
                 console.error('Chat error:', error);
