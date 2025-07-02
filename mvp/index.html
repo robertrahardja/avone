@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Avatar MVP</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(45deg, #1e3c72, #2a5298);
+            color: #fff;
+            overflow: hidden;
+        }
+        #root {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .avatar {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #ffffff, #cccccc);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 60px;
+            transition: all 0.3s ease;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            position: relative;
+            animation: float 3s ease-in-out infinite;
+        }
+        .avatar.speaking {
+            animation: pulse 0.5s ease-in-out infinite alternate;
+        }
+        .avatar.processing {
+            background: radial-gradient(circle at 30% 30%, #4a90e2, #357abd);
+        }
+        .avatar.active {
+            background: radial-gradient(circle at 30% 30%, #7ed321, #5da517);
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.1); }
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .chat-input {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 300px;
+            font-size: 16px;
+        }
+        .status {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            min-width: 150px;
+        }
+        .response-display {
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 500px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div class="avatar" id="avatar">🤖</div>
+    </div>
+    
+    <div class="ui-overlay">
+        <button id="startBtn">Start Chat</button>
+        <button id="voiceBtn" disabled>🎤 Voice</button>
+    </div>
+    
+    <div class="chat-input">
+        <input type="text" id="messageInput" placeholder="Type your message..." />
+        <button id="sendBtn">Send</button>
+    </div>
+    
+    <div class="status" id="status">Ready</div>
+    <div class="response-display" id="responseDisplay"></div>
+    
+    <script>
+        const avatar = document.getElementById('avatar');
+        const status = document.getElementById('status');
+        const responseDisplay = document.getElementById('responseDisplay');
+        const messageInput = document.getElementById('messageInput');
+        
+        let isActive = false;
+        let isListening = false;
+        
+        // Avatar expressions
+        const expressions = {
+            idle: '🤖',
+            happy: '😊',
+            thinking: '🤔',
+            speaking: '😮',
+            listening: '👂'
+        };
+        
+        function setAvatarState(state) {
+            avatar.className = 'avatar';
+            avatar.textContent = expressions.idle;
+            
+            switch(state) {
+                case 'active':
+                    avatar.className = 'avatar active';
+                    avatar.textContent = expressions.happy;
+                    break;
+                case 'processing':
+                    avatar.className = 'avatar processing';
+                    avatar.textContent = expressions.thinking;
+                    break;
+                case 'speaking':
+                    avatar.className = 'avatar speaking';
+                    avatar.textContent = expressions.speaking;
+                    break;
+                case 'listening':
+                    avatar.className = 'avatar processing';
+                    avatar.textContent = expressions.listening;
+                    break;
+            }
+        }
+        
+        // Start chat
+        document.getElementById('startBtn').addEventListener('click', () => {
+            isActive = true;
+            status.textContent = 'Chat Active';
+            document.getElementById('voiceBtn').disabled = false;
+            setAvatarState('active');
+            
+            setTimeout(() => {
+                setAvatarState('idle');
+            }, 2000);
+        });
+        
+        // Send message
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+            
+            if (!isActive) {
+                alert('Please click "Start Chat" first!');
+                return;
+            }
+            
+            // Show processing
+            status.textContent = 'Processing...';
+            setAvatarState('processing');
+            messageInput.value = '';
+            responseDisplay.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ message })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const aiResponse = data.response;
+                
+                // Show response
+                status.textContent = 'Speaking...';
+                responseDisplay.textContent = aiResponse;
+                responseDisplay.style.display = 'block';
+                setAvatarState('speaking');
+                
+                // Simulate speaking duration
+                const speakingTime = Math.max(2000, aiResponse.length * 50);
+                
+                setTimeout(() => {
+                    status.textContent = 'Ready';
+                    setAvatarState('idle');
+                    
+                    setTimeout(() => {
+                        responseDisplay.style.display = 'none';
+                    }, 3000);
+                }, speakingTime);
+                
+            } catch (error) {
+                console.error('Chat error:', error);
+                status.textContent = 'Error - using fallback';
+                
+                // Fallback responses
+                const fallbackResponses = [
+                    "Hello! How can I help you today?",
+                    "That's interesting! Tell me more.",
+                    "I understand what you're saying.",
+                    "Great question! Let me think about that.",
+                    "I'm here to help with whatever you need."
+                ];
+                
+                const response = fallbackResponses[Math.floor(Math.random() * fallbackResponses.length)];
+                responseDisplay.textContent = response;
+                responseDisplay.style.display = 'block';
+                setAvatarState('speaking');
+                
+                setTimeout(() => {
+                    status.textContent = 'Ready';
+                    setAvatarState('idle');
+                    setTimeout(() => {
+                        responseDisplay.style.display = 'none';
+                    }, 3000);
+                }, 2000);
+            }
+        });
+        
+        // Voice input
+        document.getElementById('voiceBtn').addEventListener('click', () => {
+            if (!isActive) {
+                alert('Please click "Start Chat" first!');
+                return;
+            }
+            
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                const recognition = new SpeechRecognition();
+                
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+                
+                if (!isListening) {
+                    recognition.start();
+                    isListening = true;
+                    document.getElementById('voiceBtn').textContent = '🔴 Listening...';
+                    status.textContent = 'Listening...';
+                    setAvatarState('listening');
+                }
+                
+                recognition.onresult = (event) => {
+                    const transcript = event.results[0][0].transcript;
+                    messageInput.value = transcript;
+                    document.getElementById('sendBtn').click();
+                };
+                
+                recognition.onend = () => {
+                    isListening = false;
+                    document.getElementById('voiceBtn').textContent = '🎤 Voice';
+                    if (status.textContent === 'Listening...') {
+                        status.textContent = 'Ready';
+                        setAvatarState('idle');
+                    }
+                };
+                
+                recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    isListening = false;
+                    document.getElementById('voiceBtn').textContent = '🎤 Voice';
+                    status.textContent = 'Speech error - try typing';
+                    setAvatarState('idle');
+                };
+            } else {
+                alert('Speech recognition not supported in this browser. Try Chrome or Edge.');
+            }
+        });
+        
+        // Enter key support
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('sendBtn').click();
+            }
+        });
+    </script>
+</body>
+</html>
