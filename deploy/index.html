@@ -832,35 +832,78 @@
                                 if ('speechSynthesis' in window) {
                                     const utterance = new SpeechSynthesisUtterance(audioData.text);
                                     
-                                    // Set male voice - prioritize mobile-friendly options
-                                    const voices = speechSynthesis.getVoices();
-                                    console.log('Available voices:', voices.map(v => `${v.name} (${v.lang})`));
+                                    // Function to set voice with proper loading
+                                    const setVoiceAndSpeak = () => {
+                                        // Set male voice - prioritize English mobile-friendly options
+                                        const voices = speechSynthesis.getVoices();
+                                        console.log('Available voices:', voices.map(v => `${v.name} (${v.lang})`));
+                                        
+                                        // Filter for English voices only first
+                                        const englishVoices = voices.filter(voice => 
+                                            voice.lang.startsWith('en-') || 
+                                            voice.lang === 'en' ||
+                                            voice.lang.startsWith('en_')
+                                        );
+                                        
+                                        console.log('English voices:', englishVoices.map(v => `${v.name} (${v.lang})`));
+                                        
+                                        // Look for male English voices specifically
+                                        const maleVoice = englishVoices.find(voice => 
+                                            voice.name.toLowerCase().includes('male') ||
+                                            voice.name.toLowerCase().includes('eddy') ||         // Mac male
+                                            voice.name.toLowerCase().includes('fred') ||        // Mac male
+                                            voice.name.toLowerCase().includes('daniel') ||      // Mac male  
+                                            voice.name.toLowerCase().includes('david') ||       // Windows male
+                                            voice.name.toLowerCase().includes('mark') ||        // Windows male
+                                            voice.name.toLowerCase().includes('richard') ||     // Windows male
+                                            voice.name.toLowerCase().includes('albert') ||      // Android male
+                                            voice.name.toLowerCase().includes('alex') ||        // iOS male
+                                            voice.name.toLowerCase().includes('matthew') ||     // Various platforms
+                                            voice.name.toLowerCase().includes('brian') ||       // Various platforms
+                                            voice.name.toLowerCase().includes('russell') ||     // Various platforms
+                                            (voice.gender && voice.gender.toLowerCase() === 'male')
+                                        ) || englishVoices.find(voice => 
+                                            // Fallback: any English voice that doesn't sound female
+                                            !voice.name.toLowerCase().includes('female') &&
+                                            !voice.name.toLowerCase().includes('woman') &&
+                                            !voice.name.toLowerCase().includes('samantha') &&
+                                            !voice.name.toLowerCase().includes('susan') &&
+                                            !voice.name.toLowerCase().includes('victoria') &&
+                                            !voice.name.toLowerCase().includes('karen') &&
+                                            voice.lang.startsWith('en')
+                                        ) || englishVoices[0]; // Last resort: first English voice
+                                        
+                                        if (maleVoice) {
+                                            utterance.voice = maleVoice;
+                                            utterance.lang = maleVoice.lang; // Force the language
+                                            console.log('Using male voice:', maleVoice.name, 'Language:', maleVoice.lang);
+                                        } else {
+                                            console.log('No specific male voice found, using default. Available:', voices.length);
+                                            // Force English language even with default voice
+                                            utterance.lang = 'en-US';
+                                        }
+                                        
+                                        // Force English language as backup
+                                        if (!utterance.lang || !utterance.lang.startsWith('en')) {
+                                            utterance.lang = 'en-US';
+                                            console.log('Forcing English language: en-US');
+                                        }
+                                        
+                                        // Mobile-optimized settings
+                                        utterance.rate = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.9 : 0.85;
+                                        utterance.pitch = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.8 : 0.6;
+                                        utterance.volume = 1.0; // Max volume for mobile
+                                        
+                                        // Speak the utterance
+                                        speechSynthesis.speak(utterance);
+                                    };
                                     
-                                    const maleVoice = voices.find(voice => 
-                                        voice.name.toLowerCase().includes('eddy') ||         // Preferred male voice on Mac
-                                        voice.name.toLowerCase().includes('fred') ||        // Deep male voice on Mac
-                                        voice.name.toLowerCase().includes('daniel') ||      // Male voice on Mac  
-                                        voice.name.toLowerCase().includes('david') ||       // Windows male
-                                        voice.name.toLowerCase().includes('mark') ||        // Windows male
-                                        voice.name.toLowerCase().includes('richard') ||     // Windows male
-                                        voice.name.toLowerCase().includes('google uk english male') ||
-                                        voice.name.toLowerCase().includes('google us english male') ||
-                                        voice.name.toLowerCase().includes('albert') ||      // Android male
-                                        voice.name.toLowerCase().includes('alex') ||        // iOS male  
-                                        (voice.lang.startsWith('en') && voice.gender === 'male')
-                                    );
-                                    
-                                    if (maleVoice) {
-                                        utterance.voice = maleVoice;
-                                        console.log('Using male voice:', maleVoice.name);
+                                    // Check if voices are loaded, if not wait for them
+                                    if (speechSynthesis.getVoices().length === 0) {
+                                        speechSynthesis.addEventListener('voiceschanged', setVoiceAndSpeak, { once: true });
                                     } else {
-                                        console.log('No specific male voice found, using default. Available:', voices.length);
+                                        setVoiceAndSpeak();
                                     }
-                                    
-                                    // Mobile-optimized settings
-                                    utterance.rate = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.9 : 0.85;
-                                    utterance.pitch = /iPad|iPhone|iPod/i.test(navigator.userAgent) ? 0.8 : 0.6;
-                                    utterance.volume = 1.0; // Max volume for mobile
                                     
                                     utterance.onend = () => {
                                         status.textContent = 'Ready';
@@ -875,8 +918,6 @@
                                         console.error('Browser TTS failed');
                                         fallbackToTextDisplay();
                                     };
-                                    
-                                    speechSynthesis.speak(utterance);
                                 } else {
                                     fallbackToTextDisplay();
                                 }
