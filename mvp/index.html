@@ -538,46 +538,44 @@
         let currentAudio = null;
         let isPlaying = false;
         
-        // AWS Polly viseme mapping for basic mouth shapes (mouthOpen, mouthSmile)
+        // AWS Polly viseme mapping - neutral expressions during speech
         const visemeToMouthShape = {
             // Silence
             'sil': { open: 0.0, smile: 0.0 },
             
-            // Consonants - lowercase as returned by AWS Polly
+            // Consonants - all neutral, no smiles during speech
             'p': { open: 0.0, smile: 0.0 },     // P, B, M - lips closed
-            'f': { open: 0.1, smile: 0.0 },     // F, V - lips slightly open
-            't': { open: 0.3, smile: 0.0 },     // T, D, N, L - tongue tip to roof
-            'S': { open: 0.1, smile: 0.0 },     // S, Z - tongue tip down (uppercase S)
-            's': { open: 0.1, smile: 0.0 },     // S, Z - tongue tip down (lowercase s)
-            'r': { open: 0.2, smile: 0.0 },     // R - tongue pulled back
-            'k': { open: 0.2, smile: 0.0 },     // K, G - back of tongue up
+            'f': { open: 0.15, smile: 0.0 },    // F, V - lips slightly open
+            't': { open: 0.3, smile: 0.0 },     // T, D, N, L - tongue tip
+            'S': { open: 0.2, smile: 0.0 },     // S, Z - neutral
+            's': { open: 0.2, smile: 0.0 },     // S, Z - neutral
+            'r': { open: 0.3, smile: 0.0 },     // R - rounded
+            'k': { open: 0.25, smile: 0.0 },    // K, G - neutral
             
-            // Vowels - lowercase as returned by AWS Polly
-            'a': { open: 0.8, smile: 0.0 },     // AH, AA - wide open
-            'e': { open: 0.4, smile: 0.3 },     // EH, EY - medium open, slight smile
-            'i': { open: 0.2, smile: 0.5 },     // IH, IY - small opening, smile
-            'o': { open: 0.6, smile: 0.0 },     // OH, OW - round mouth
-            'u': { open: 0.3, smile: 0.0 },     // UH, UW - small round opening
-            '@': { open: 0.5, smile: 0.0 },     // Schwa - medium open
+            // Vowels - natural mouth shapes without smiles
+            'a': { open: 0.6, smile: 0.0 },     // AH, AA - moderately wide
+            'e': { open: 0.4, smile: 0.0 },     // EH, EY - medium open
+            'i': { open: 0.2, smile: 0.0 },     // IH, IY - small opening
+            'o': { open: 0.5, smile: 0.0 },     // OH, OW - round
+            'u': { open: 0.3, smile: 0.0 },     // UH, UW - small round
+            '@': { open: 0.4, smile: 0.0 },     // Schwa - neutral
             
-            // Uppercase versions (AWS Polly sometimes uses these)
+            // Uppercase versions - all neutral
             'PP': { open: 0.0, smile: 0.0 },
-            'FF': { open: 0.1, smile: 0.0 },
-            'TH': { open: 0.2, smile: 0.0 },
+            'FF': { open: 0.15, smile: 0.0 },
+            'TH': { open: 0.25, smile: 0.0 },
             'DD': { open: 0.3, smile: 0.0 },
-            'kk': { open: 0.2, smile: 0.0 },
-            'CH': { open: 0.1, smile: 0.0 },
-            'SS': { open: 0.1, smile: 0.0 },
-            'nn': { open: 0.1, smile: 0.0 },
-            'RR': { open: 0.2, smile: 0.0 },
-            'aa': { open: 0.8, smile: 0.0 },
-            'E': { open: 0.4, smile: 0.3 },
-            'I': { open: 0.2, smile: 0.5 },
-            'O': { open: 0.6, smile: 0.0 },
+            'kk': { open: 0.25, smile: 0.0 },
+            'CH': { open: 0.2, smile: 0.0 },
+            'SS': { open: 0.2, smile: 0.0 },
+            'nn': { open: 0.2, smile: 0.0 },
+            'RR': { open: 0.3, smile: 0.0 },
+            'aa': { open: 0.6, smile: 0.0 },
+            'E': { open: 0.4, smile: 0.0 },
+            'I': { open: 0.2, smile: 0.0 },
+            'O': { open: 0.5, smile: 0.0 },
             'U': { open: 0.3, smile: 0.0 },
-            
-            // Special cases
-            'T': { open: 0.3, smile: 0.0 }      // Sometimes uppercase T
+            'T': { open: 0.3, smile: 0.0 }
         };
         
         function setAvatarState(state) {
@@ -604,7 +602,7 @@
                 case 'speaking':
                     avatar.className = 'avatar speaking';
                     startTalking();
-                    setSmile(0.3); // Slight smile while talking
+                    clearSmile(); // Clear any existing smile from previous states
                     break;
                 case 'listening':
                     avatar.className = 'avatar processing';
@@ -653,18 +651,36 @@
                         }
                     }
                     
-                    // Look for basic mouth shapes (mouthOpen, mouthSmile)
+                    // Look for mouth shapes (basic or ARKit visemes)
                     const hasMouthShapes = morphTargets.hasOwnProperty('mouthOpen') || 
                                          morphTargets.hasOwnProperty('mouthSmile') ||
-                                         Object.keys(morphTargets).some(key => key.toLowerCase().includes('mouth'));
+                                         morphTargets.hasOwnProperty('viseme_sil') ||
+                                         morphTargets.hasOwnProperty('mouthFunnel') ||
+                                         Object.keys(morphTargets).some(key => 
+                                            key.toLowerCase().includes('mouth') || 
+                                            key.toLowerCase().includes('viseme') ||
+                                            key.toLowerCase().includes('jaw')
+                                         );
                     
                     if (hasMouthShapes) {
-                        mouthShapes[child.uuid] = {
-                            mesh: child,
-                            morphTargets: morphTargets
-                        };
-                        console.log(`✅ Found mouth shapes for lip sync on ${child.name}:`, 
-                                  Object.keys(morphTargets).filter(key => key.toLowerCase().includes('mouth')));
+                        // Exclude eye meshes from mouth animation
+                        const meshName = child.name || '';
+                        const isEyeMesh = meshName.toLowerCase().includes('eye');
+                        
+                        if (!isEyeMesh) {
+                            mouthShapes[child.uuid] = {
+                                mesh: child,
+                                morphTargets: morphTargets
+                            };
+                            console.log(`✅ Found mouth shapes for lip sync on ${child.name}:`, 
+                                      Object.keys(morphTargets).filter(key => 
+                                        key.toLowerCase().includes('mouth') || 
+                                        key.toLowerCase().includes('viseme') ||
+                                        key.toLowerCase().includes('jaw')
+                                      ));
+                        } else {
+                            console.log(`⚠️ Skipping eye mesh ${child.name} for mouth animation`);
+                        }
                     }
                 }
             });
@@ -676,7 +692,28 @@
             }
         }
         
-        // Set viseme using basic mouth shapes (mouthOpen, mouthSmile)
+        // ARKit viseme mapping - NO SMILES during speech
+        const arkitVisemeMapping = {
+            'sil': { shapes: ['viseme_sil', 'mouthClose'], weight: 1.0 },
+            'p': { shapes: ['viseme_PP', 'mouthClose'], weight: 1.0 },
+            'f': { shapes: ['viseme_FF', 'mouthOpen'], weight: 0.3 },
+            't': { shapes: ['viseme_DD', 'mouthOpen'], weight: 0.6 },
+            's': { shapes: ['viseme_SS', 'mouthOpen'], weight: 0.4 },
+            'S': { shapes: ['viseme_SS', 'mouthOpen'], weight: 0.4 },
+            'r': { shapes: ['viseme_RR', 'mouthOpen'], weight: 0.5 },
+            'k': { shapes: ['viseme_kk', 'mouthOpen'], weight: 0.4 },
+            'a': { shapes: ['viseme_aa', 'mouthOpen'], weight: 1.0 },
+            'e': { shapes: ['viseme_E', 'mouthOpen'], weight: 0.7 },
+            'i': { shapes: ['viseme_I', 'mouthOpen'], weight: 0.8 },
+            'o': { shapes: ['viseme_O', 'mouthOpen'], weight: 0.9 },
+            'u': { shapes: ['viseme_U', 'mouthOpen'], weight: 0.8 },
+            '@': { shapes: ['viseme_aa', 'mouthOpen'], weight: 0.6 },
+            'E': { shapes: ['viseme_E', 'mouthOpen'], weight: 0.7 },
+            'O': { shapes: ['viseme_O', 'mouthOpen'], weight: 0.9 },
+            'T': { shapes: ['viseme_DD', 'mouthOpen'], weight: 0.6 }
+        };
+
+        // Set viseme using advanced ARKit shapes or fallback to basic shapes
         function setViseme(viseme, weight = 1.0) {
             console.log(`🗣️ setViseme called: ${viseme} with weight ${weight}`);
             
@@ -690,39 +727,69 @@
                 return;
             }
             
-            const mouthShape = visemeToMouthShape[viseme];
-            if (!mouthShape) {
-                console.log(`❌ No mouth shape mapping for viseme: ${viseme}`);
-                return;
+            let shapesApplied = 0;
+            
+            // Try ARKit mapping first
+            const arkitMapping = arkitVisemeMapping[viseme];
+            if (arkitMapping) {
+                Object.values(mouthShapes).forEach(shapeData => {
+                    const morphTargets = shapeData.morphTargets;
+                    const mesh = shapeData.mesh;
+                    
+                    // Reset all mouth-related shapes first
+                    Object.keys(morphTargets).forEach(targetName => {
+                        if (targetName.toLowerCase().includes('mouth') || 
+                            targetName.toLowerCase().includes('viseme') ||
+                            targetName.toLowerCase().includes('jaw')) {
+                            mesh.morphTargetInfluences[morphTargets[targetName]] = 0;
+                        }
+                    });
+                    
+                    // Apply the specific shapes for this viseme
+                    arkitMapping.shapes.forEach(shapeName => {
+                        if (morphTargets.hasOwnProperty(shapeName)) {
+                            const shapeIndex = morphTargets[shapeName];
+                            const shapeWeight = arkitMapping.weight * weight;
+                            mesh.morphTargetInfluences[shapeIndex] = shapeWeight;
+                            shapesApplied++;
+                            console.log(`✅ Set ${shapeName} to ${shapeWeight} on ${mesh.name}`);
+                        }
+                    });
+                });
             }
             
-            console.log(`🎯 Setting mouth: open=${mouthShape.open}, smile=${mouthShape.smile}`);
-            
-            // Apply mouth shapes to all meshes that have them
-            let shapesApplied = 0;
-            Object.values(mouthShapes).forEach(shapeData => {
-                const morphTargets = shapeData.morphTargets;
-                const mesh = shapeData.mesh;
-                
-                // Set mouthOpen
-                if (morphTargets.hasOwnProperty('mouthOpen')) {
-                    const openIndex = morphTargets['mouthOpen'];
-                    mesh.morphTargetInfluences[openIndex] = mouthShape.open * weight;
-                    shapesApplied++;
-                    console.log(`✅ Set mouthOpen to ${mouthShape.open * weight} on ${mesh.name}`);
+            // Fallback to basic mouth shapes if no ARKit shapes found
+            if (shapesApplied === 0) {
+                const mouthShape = visemeToMouthShape[viseme];
+                if (mouthShape) {
+                    console.log(`🎯 Fallback to basic shapes: open=${mouthShape.open}, smile=${mouthShape.smile}`);
+                    
+                    Object.values(mouthShapes).forEach(shapeData => {
+                        const morphTargets = shapeData.morphTargets;
+                        const mesh = shapeData.mesh;
+                        
+                        // Set mouthOpen with clamping to prevent negative values
+                        if (morphTargets.hasOwnProperty('mouthOpen')) {
+                            const openIndex = morphTargets['mouthOpen'];
+                            const openValue = Math.max(0, Math.min(1, mouthShape.open * weight));
+                            mesh.morphTargetInfluences[openIndex] = openValue;
+                            shapesApplied++;
+                            console.log(`✅ Set mouthOpen to ${openValue.toFixed(2)} on ${mesh.name}`);
+                        }
+                        
+                        // NO SMILES during speech - keep mouthSmile at 0 during lip sync
+                        if (morphTargets.hasOwnProperty('mouthSmile')) {
+                            const smileIndex = morphTargets['mouthSmile'];
+                            mesh.morphTargetInfluences[smileIndex] = 0.0; // Always 0 during speech
+                            shapesApplied++;
+                            console.log(`✅ Set mouthSmile to 0.00 on ${mesh.name} (no smiles during speech)`);
+                        }
+                    });
                 }
-                
-                // Set mouthSmile
-                if (morphTargets.hasOwnProperty('mouthSmile')) {
-                    const smileIndex = morphTargets['mouthSmile'];
-                    mesh.morphTargetInfluences[smileIndex] = mouthShape.smile * weight;
-                    shapesApplied++;
-                    console.log(`✅ Set mouthSmile to ${mouthShape.smile * weight} on ${mesh.name}`);
-                }
-            });
+            }
             
             if (shapesApplied === 0) {
-                console.log(`❌ No mouth shapes applied`);
+                console.log(`❌ No mouth shapes applied for viseme: ${viseme}`);
             } else {
                 console.log(`✅ Applied ${shapesApplied} mouth shape changes`);
             }
@@ -797,6 +864,13 @@
                         cancelAnimationFrame(animationId);
                     }
                     setViseme('sil'); // Reset to silent
+                    
+                    // Add a smile after finishing speech
+                    setTimeout(() => {
+                        console.log('😊 Adding smile after speech');
+                        addPostSpeechSmile();
+                    }, 200); // Brief pause before smile
+                    
                     resolve();
                 };
                 
@@ -827,6 +901,46 @@
             });
         }
         
+        // Add a pleasant smile after finishing speech
+        function addPostSpeechSmile() {
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) return;
+            
+            console.log('😊 Setting post-speech smile');
+            
+            // Apply a gentle smile to all meshes
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                // Reset mouth open to neutral
+                if (morphTargets.hasOwnProperty('mouthOpen')) {
+                    const openIndex = morphTargets['mouthOpen'];
+                    mesh.morphTargetInfluences[openIndex] = 0.0;
+                }
+                
+                // Set a pleasant smile
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = 0.4; // Gentle smile
+                    console.log(`✅ Set post-speech smile to 0.4 on ${mesh.name}`);
+                }
+            });
+            
+            // Remove smile after a few seconds
+            setTimeout(() => {
+                console.log('😐 Removing post-speech smile');
+                Object.values(mouthShapes).forEach(shapeData => {
+                    const morphTargets = shapeData.morphTargets;
+                    const mesh = shapeData.mesh;
+                    
+                    if (morphTargets.hasOwnProperty('mouthSmile')) {
+                        const smileIndex = morphTargets['mouthSmile'];
+                        mesh.morphTargetInfluences[smileIndex] = 0.0;
+                    }
+                });
+            }, 2500); // Smile for 2.5 seconds
+        }
+        
         function setSmile(intensity = 0.5) {
             if (smileBlendShape && smileBlendShape.mesh.morphTargetInfluences) {
                 smileBlendShape.mesh.morphTargetInfluences[smileBlendShape.index] = Math.max(0, Math.min(1, intensity));
@@ -835,9 +949,23 @@
         }
         
         function clearSmile() {
+            // Clear the original smile blend shape
             if (smileBlendShape && smileBlendShape.mesh.morphTargetInfluences) {
                 smileBlendShape.mesh.morphTargetInfluences[smileBlendShape.index] = 0;
+                console.log('✅ Cleared original smile blend shape');
             }
+            
+            // Also clear mouthSmile on all mouth shape meshes
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = 0.0;
+                    console.log(`✅ Cleared mouthSmile on ${mesh.name}`);
+                }
+            });
         }
         
         function startTalking() {
@@ -906,6 +1034,87 @@
                     console.log('All blend shapes:', Object.keys(child.morphTargetDictionary));
                 }
             });
+        };
+        
+        // Test ONLY mouth opening (no smile)
+        window.testMouthOpen = function(amount = 0.5) {
+            console.log(`🧪 Testing ONLY mouth open: ${amount}`);
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) {
+                console.log('❌ No mouth shapes available');
+                return;
+            }
+            
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                // Set ONLY mouthOpen
+                if (morphTargets.hasOwnProperty('mouthOpen')) {
+                    const openIndex = morphTargets['mouthOpen'];
+                    mesh.morphTargetInfluences[openIndex] = amount;
+                    console.log(`✅ Set mouthOpen to ${amount} on ${mesh.name}`);
+                }
+                
+                // Force mouthSmile to 0
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = 0.0;
+                    console.log(`✅ Set mouthSmile to 0.0 on ${mesh.name}`);
+                }
+            });
+        };
+        
+        // Test ONLY smile (no mouth open)
+        window.testSmileOnly = function(amount = 0.5) {
+            console.log(`🧪 Testing ONLY smile: ${amount}`);
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) {
+                console.log('❌ No mouth shapes available');
+                return;
+            }
+            
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                // Force mouthOpen to 0
+                if (morphTargets.hasOwnProperty('mouthOpen')) {
+                    const openIndex = morphTargets['mouthOpen'];
+                    mesh.morphTargetInfluences[openIndex] = 0.0;
+                    console.log(`✅ Set mouthOpen to 0.0 on ${mesh.name}`);
+                }
+                
+                // Set ONLY mouthSmile
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = amount;
+                    console.log(`✅ Set mouthSmile to ${amount} on ${mesh.name}`);
+                }
+            });
+        };
+        
+        // Reset mouth to neutral
+        window.resetMouth = function() {
+            console.log('🧪 Resetting mouth to neutral');
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) {
+                console.log('❌ No mouth shapes available');
+                return;
+            }
+            
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                if (morphTargets.hasOwnProperty('mouthOpen')) {
+                    const openIndex = morphTargets['mouthOpen'];
+                    mesh.morphTargetInfluences[openIndex] = 0.0;
+                }
+                
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = 0.0;
+                }
+            });
+            console.log('✅ Mouth reset to neutral');
         };
 
         // Initialize 3D avatar when page loads
