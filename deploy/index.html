@@ -338,7 +338,7 @@
     
     <div class="ui-overlay">
         <button id="startBtn">Start Chat</button>
-        <button id="voiceBtn" disabled>🎤 Voice</button>
+        <button id="voiceBtn">🎤 Voice</button>
     </div>
     
     <div class="chat-input">
@@ -355,8 +355,22 @@
         const responseDisplay = document.getElementById('responseDisplay');
         const messageInput = document.getElementById('messageInput');
         
-        let isActive = false;
+        let isActive = true;  // Start in active mode by default
         let isListening = false;
+        
+        // Add Enter key support for immediate typing
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                document.getElementById('sendBtn').click();
+            }
+        });
+        
+        // Focus on input field when page loads
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                messageInput.focus();
+            }, 500);
+        });
         
         // 3D Avatar System
         let scene, camera, renderer, avatarModel, mixer, clock;
@@ -1002,11 +1016,18 @@
         // Initialize 3D avatar when page loads
         window.addEventListener('load', init3DAvatar);
         
-        // Start chat
+        // Initialize in active mode when page loads
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                status.textContent = 'Ready - Type your message';
+                setAvatarState('idle');
+            }, 1000);
+        });
+        
+        // Start chat (used to return from voice mode)
         document.getElementById('startBtn').addEventListener('click', () => {
             isActive = true;
             status.textContent = 'Chat Active';
-            document.getElementById('voiceBtn').disabled = false;
             setAvatarState('active');
             
             // No automatic speech - just activate quietly
@@ -1023,8 +1044,9 @@
             if (!message) return;
             
             if (!isActive) {
-                alert('Please click "Start Chat" first!');
-                return;
+                // Auto-activate if not active
+                isActive = true;
+                status.textContent = 'Chat Active';
             }
             
             // Show processing
@@ -1242,8 +1264,9 @@
         // Voice input
         document.getElementById('voiceBtn').addEventListener('click', () => {
             if (!isActive) {
-                alert('Please click "Start Chat" first!');
-                return;
+                // Auto-activate if not active
+                isActive = true;
+                status.textContent = 'Chat Active';
             }
             
             if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
