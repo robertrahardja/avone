@@ -1,0 +1,13 @@
+name = "ai-avatar-mvp"
+compatibility_date = "2023-12-01"
+pages_build_output_dir = "."
+
+[env.production]
+name = "ai-avatar-mvp"
+
+[env.production.vars]
+# Environment variables are set in Cloudflare Dashboard
+# OPENAI_API_KEY = "your-openai-key"
+# AWS_ACCESS_KEY_ID = "your-aws-key"
+# AWS_SECRET_ACCESS_KEY = "your-aws-secret"
+# AWS_REGION = "us-east-1"
