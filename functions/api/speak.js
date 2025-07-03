@@ -74,58 +74,52 @@ export async function onRequestOptions() {
   });
 }
 
-// AWS Polly integration using AWS REST API with proper v4 signing
+// Simplified AWS Polly integration using built-in crypto
 async function callAWSPollyWithVisemes(text, voiceId, env) {
   try {
     const region = env.AWS_REGION || 'ap-southeast-1';
+    const accessKeyId = env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = env.AWS_SECRET_ACCESS_KEY;
+    const service = 'polly';
+    const host = `polly.${region}.amazonaws.com`;
     
-    // Import AWS signing library for Cloudflare Workers
-    const { AwsClient } = await import('aws4fetch');
+    // Create timestamp
+    const now = new Date();
+    const dateStamp = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const amzDate = now.toISOString().replace(/[:\-]|\.\d{3}/g, '');
     
-    const aws = new AwsClient({
-      accessKeyId: env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-      region: region
-    });
-    
-    // Parameters for viseme request
-    const visemeParams = {
+    // Create signed requests for both visemes and audio
+    const visemeBody = JSON.stringify({
       Text: text,
       OutputFormat: 'json',
       VoiceId: voiceId,
       Engine: 'neural',
       SpeechMarkTypes: ['viseme']
-    };
+    });
     
-    // Parameters for audio request
-    const audioParams = {
+    const audioBody = JSON.stringify({
       Text: text,
       OutputFormat: 'mp3',
       VoiceId: voiceId,
       Engine: 'neural'
-    };
-    
-    // Create requests
-    const visemeRequest = new Request(`https://polly.${region}.amazonaws.com/v1/speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-amz-json-1.0'
-      },
-      body: JSON.stringify(visemeParams)
     });
     
-    const audioRequest = new Request(`https://polly.${region}.amazonaws.com/v1/speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-amz-json-1.0'
-      },
-      body: JSON.stringify(audioParams)
-    });
+    // Create authorization headers
+    const visemeHeaders = await createAWSHeaders('POST', '/', visemeBody, host, region, service, accessKeyId, secretAccessKey, amzDate, dateStamp);
+    const audioHeaders = await createAWSHeaders('POST', '/', audioBody, host, region, service, accessKeyId, secretAccessKey, amzDate, dateStamp);
     
-    // Sign and execute requests
+    // Make requests
     const [visemeResponse, audioResponse] = await Promise.all([
-      aws.fetch(visemeRequest),
-      aws.fetch(audioRequest)
+      fetch(`https://${host}/v1/speech`, {
+        method: 'POST',
+        headers: visemeHeaders,
+        body: visemeBody
+      }),
+      fetch(`https://${host}/v1/speech`, {
+        method: 'POST',
+        headers: audioHeaders,
+        body: audioBody
+      })
     ]);
     
     if (visemeResponse.ok && audioResponse.ok) {
@@ -143,18 +137,102 @@ async function callAWSPollyWithVisemes(text, voiceId, env) {
         visemes: visemes,
         duration: calculateDuration(visemes)
       };
+    } else {
+      console.error('AWS Polly API error:', {
+        visemeStatus: visemeResponse.status,
+        audioStatus: audioResponse.status
+      });
     }
     
-    console.error('AWS Polly API responses not OK:', {
-      visemeStatus: visemeResponse.status,
-      audioStatus: audioResponse.status
-    });
     return null;
     
   } catch (error) {
     console.error('AWS Polly error:', error);
     return null;
   }
+}
+
+// Create AWS v4 signature headers
+async function createAWSHeaders(method, uri, body, host, region, service, accessKeyId, secretAccessKey, amzDate, dateStamp) {
+  const algorithm = 'AWS4-HMAC-SHA256';
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  
+  const headers = {
+    'Host': host,
+    'X-Amz-Date': amzDate,
+    'Content-Type': 'application/x-amz-json-1.0'
+  };
+  
+  // Create canonical request
+  const signedHeaders = Object.keys(headers).sort().join(';').toLowerCase();
+  const canonicalHeaders = Object.keys(headers).sort().map(key => 
+    `${key.toLowerCase()}:${headers[key]}\n`
+  ).join('');
+  
+  const payloadHash = await sha256(body);
+  const canonicalRequest = [
+    method,
+    uri,
+    '',
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join('\n');
+  
+  // Create string to sign
+  const stringToSign = [
+    algorithm,
+    amzDate,
+    credentialScope,
+    await sha256(canonicalRequest)
+  ].join('\n');
+  
+  // Calculate signature
+  const signingKey = await getSignatureKey(secretAccessKey, dateStamp, region, service);
+  const signature = await hmacSha256(signingKey, stringToSign);
+  
+  // Create authorization header
+  const authorization = `${algorithm} Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  
+  return {
+    ...headers,
+    'Authorization': authorization
+  };
+}
+
+// Helper functions for AWS signing
+async function sha256(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacSha256(key, message) {
+  const keyBuffer = typeof key === 'string' ? new TextEncoder().encode(key) : key;
+  const msgBuffer = new TextEncoder().encode(message);
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', keyBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, msgBuffer);
+  const signatureArray = Array.from(new Uint8Array(signature));
+  return signatureArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function getSignatureKey(key, dateStamp, region, service) {
+  const kDate = await hmacSha256(new TextEncoder().encode(`AWS4${key}`), dateStamp);
+  const kRegion = await hmacSha256(hexToBytes(kDate), region);
+  const kService = await hmacSha256(hexToBytes(kRegion), service);
+  const kSigning = await hmacSha256(hexToBytes(kService), 'aws4_request');
+  return hexToBytes(kSigning);
+}
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+  }
+  return bytes;
 }
 
 // Parse viseme data from AWS Polly
