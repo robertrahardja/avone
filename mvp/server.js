@@ -70,14 +70,12 @@ app.post('/api/chat', async (req, res) => {
                 });
                 
                 response = completion.choices[0].message.content.trim();
-                console.log('✅ OpenAI response generated');
                 
             } catch (openaiError) {
                 console.error('OpenAI error:', openaiError.message);
                 response = getFallbackResponse(message);
             }
         } else {
-            console.log('ℹ️ OpenAI not configured, using fallback');
             response = getFallbackResponse(message);
         }
         
@@ -109,7 +107,6 @@ app.post('/api/speak', async (req, res) => {
         if (voiceId) selectedVoice = voiceId;
         if (VoiceId) selectedVoice = VoiceId;
         
-        console.log(`🎤 Using AWS Polly voice: ${selectedVoice} (gender: ${gender || 'male'})`);
         
         // Try AWS Polly first with viseme data
         if (pollyClient) {
@@ -162,8 +159,6 @@ app.post('/api/speak', async (req, res) => {
                     const audioBase64 = audioBuffer.toString('base64');
                     const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
 
-                    console.log(`✅ AWS Polly generated ${visemes.length} visemes with ${selectedVoice} voice`);
-                    console.log('First few visemes:', visemes.slice(0, 5));
 
                     res.json({
                         audio: audioDataUrl,
@@ -185,7 +180,6 @@ app.post('/api/speak', async (req, res) => {
             text: text,
             message: 'Using browser text-to-speech'
         });
-        console.log('ℹ️ Using browser TTS fallback');
         
     } catch (error) {
         console.error('TTS error:', error);

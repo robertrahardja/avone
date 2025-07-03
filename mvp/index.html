@@ -419,24 +419,6 @@
                             child.castShadow = true;
                             child.receiveShadow = true;
                             
-                            // Debug: Check for morph targets on each mesh
-                            if (child.morphTargetDictionary) {
-                                console.log('🔍 Found mesh with morph targets:', child.name);
-                                console.log('Available morph targets:', Object.keys(child.morphTargetDictionary));
-                                
-                                // Check specifically for viseme blend shapes
-                                const visemeTargets = Object.keys(child.morphTargetDictionary).filter(key => 
-                                    key.toLowerCase().includes('viseme') || 
-                                    key.toLowerCase().includes('mouth') ||
-                                    key.toLowerCase().includes('jaw')
-                                );
-                                
-                                if (visemeTargets.length > 0) {
-                                    console.log('✅ Found viseme targets:', visemeTargets);
-                                } else {
-                                    console.log('❌ No viseme targets found in this mesh');
-                                }
-                            }
                         }
                     });
                     
@@ -451,17 +433,10 @@
                     }
                     
                     isModelLoaded = true;
-                    console.log('3D Avatar loaded successfully');
-                    
-                    // Initialize blend shapes after model loads
                     findBones();
                 },
-                function(progress) {
-                    console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
-                },
+                undefined,
                 function(error) {
-                    console.error('Error loading 3D model:', error);
-                    // Fallback to simple geometry
                     createFallbackAvatar();
                 }
             );
@@ -626,19 +601,15 @@
                     const name = child.name.toLowerCase();
                     if (name.includes('head') && !headBone) {
                         headBone = child;
-                        console.log('Found head bone:', child.name);
                     }
                     if (name.includes('jaw') && !jawBone) {
                         jawBone = child;
-                        console.log('Found jaw bone:', child.name);
                     }
                 }
                 
                 // Look for facial mesh with morph targets
                 if (child.isMesh && child.morphTargetDictionary) {
                     faceMesh = child;
-                    console.log('Found face mesh with morph targets:', Object.keys(child.morphTargetDictionary));
-                    
                     const morphTargets = child.morphTargetDictionary;
                     
                     // Look for smile-related blend shapes
@@ -646,7 +617,6 @@
                         const targetName = target.toLowerCase();
                         if (targetName.includes('smile') || targetName.includes('happy') || targetName.includes('joy')) {
                             smileBlendShape = { mesh: child, index: morphTargets[target] };
-                            console.log('Found smile blend shape:', target, 'at index', morphTargets[target]);
                             break;
                         }
                     }
@@ -672,24 +642,11 @@
                                 mesh: child,
                                 morphTargets: morphTargets
                             };
-                            console.log(`✅ Found mouth shapes for lip sync on ${child.name}:`, 
-                                      Object.keys(morphTargets).filter(key => 
-                                        key.toLowerCase().includes('mouth') || 
-                                        key.toLowerCase().includes('viseme') ||
-                                        key.toLowerCase().includes('jaw')
-                                      ));
-                        } else {
-                            console.log(`⚠️ Skipping eye mesh ${child.name} for mouth animation`);
                         }
                     }
                 }
             });
             
-            if (Object.keys(mouthShapes).length > 0) {
-                console.log(`🎉 Lip sync ready! Found ${Object.keys(mouthShapes).length} meshes with mouth shapes`);
-            } else {
-                console.log('❌ No mouth shapes found for lip sync');
-            }
         }
         
         // ARKit viseme mapping - NO SMILES during speech
@@ -715,17 +672,8 @@
 
         // Set viseme using advanced ARKit shapes or fallback to basic shapes
         function setViseme(viseme, weight = 1.0) {
-            console.log(`🗣️ setViseme called: ${viseme} with weight ${weight}`);
-            
-            if (!avatarModel) {
-                console.log('❌ No avatar model loaded');
-                return;
-            }
-            
-            if (Object.keys(mouthShapes).length === 0) {
-                console.log('❌ No mouth shapes found');
-                return;
-            }
+            if (!avatarModel) return;
+            if (Object.keys(mouthShapes).length === 0) return;
             
             let shapesApplied = 0;
             
@@ -752,7 +700,6 @@
                             const shapeWeight = arkitMapping.weight * weight;
                             mesh.morphTargetInfluences[shapeIndex] = shapeWeight;
                             shapesApplied++;
-                            console.log(`✅ Set ${shapeName} to ${shapeWeight} on ${mesh.name}`);
                         }
                     });
                 });
@@ -762,8 +709,6 @@
             if (shapesApplied === 0) {
                 const mouthShape = visemeToMouthShape[viseme];
                 if (mouthShape) {
-                    console.log(`🎯 Fallback to basic shapes: open=${mouthShape.open}, smile=${mouthShape.smile}`);
-                    
                     Object.values(mouthShapes).forEach(shapeData => {
                         const morphTargets = shapeData.morphTargets;
                         const mesh = shapeData.mesh;
@@ -774,7 +719,6 @@
                             const openValue = Math.max(0, Math.min(1, mouthShape.open * weight));
                             mesh.morphTargetInfluences[openIndex] = openValue;
                             shapesApplied++;
-                            console.log(`✅ Set mouthOpen to ${openValue.toFixed(2)} on ${mesh.name}`);
                         }
                         
                         // NO SMILES during speech - keep mouthSmile at 0 during lip sync
@@ -782,16 +726,9 @@
                             const smileIndex = morphTargets['mouthSmile'];
                             mesh.morphTargetInfluences[smileIndex] = 0.0; // Always 0 during speech
                             shapesApplied++;
-                            console.log(`✅ Set mouthSmile to 0.00 on ${mesh.name} (no smiles during speech)`);
                         }
                     });
                 }
-            }
-            
-            if (shapesApplied === 0) {
-                console.log(`❌ No mouth shapes applied for viseme: ${viseme}`);
-            } else {
-                console.log(`✅ Applied ${shapesApplied} mouth shape changes`);
             }
         }
         
@@ -806,13 +743,8 @@
                 let animationId = null;
                 let audioStartTime = null;
                 
-                console.log(`🎬 Starting lip sync with ${visemes.length} visemes`);
-                
                 const animateLipSync = () => {
-                    if (!isPlaying || !currentAudio) {
-                        console.log('🛑 Stopping lip sync animation');
-                        return;
-                    }
+                    if (!isPlaying || !currentAudio) return;
                     
                     // Use audio's currentTime for more accurate sync
                     const elapsed = currentAudio.currentTime;
@@ -834,48 +766,38 @@
                         visemeIndex = targetIndex;
                         const currentViseme = visemes[visemeIndex];
                         setViseme(currentViseme.viseme);
-                        console.log(`🎵 Lip sync: ${currentViseme.viseme} at ${elapsed.toFixed(2)}s`);
                     }
                     
                     // Continue animation while audio is playing
                     if (!currentAudio.paused && !currentAudio.ended) {
                         animationId = requestAnimationFrame(animateLipSync);
                     } else {
-                        console.log('🏁 Audio ended or paused, stopping lip sync');
                         isPlaying = false;
                         setViseme('sil');
                     }
                 };
                 
-                currentAudio.onloadeddata = () => {
-                    console.log('📱 Audio loaded, duration:', currentAudio.duration);
-                };
-                
                 currentAudio.onplay = () => {
-                    console.log('▶️ Audio started playing');
                     audioStartTime = Date.now();
                     animationId = requestAnimationFrame(animateLipSync);
                 };
                 
                 currentAudio.onended = () => {
-                    console.log('🏁 Audio playback ended');
                     isPlaying = false;
                     if (animationId) {
                         cancelAnimationFrame(animationId);
                     }
-                    setViseme('sil'); // Reset to silent
+                    setViseme('sil');
                     
                     // Add a smile after finishing speech
                     setTimeout(() => {
-                        console.log('😊 Adding smile after speech');
                         addPostSpeechSmile();
-                    }, 200); // Brief pause before smile
+                    }, 200);
                     
                     resolve();
                 };
                 
                 currentAudio.onpause = () => {
-                    console.log('⏸️ Audio paused');
                     isPlaying = false;
                     if (animationId) {
                         cancelAnimationFrame(animationId);
@@ -883,7 +805,6 @@
                 };
                 
                 currentAudio.onerror = (error) => {
-                    console.error('🚨 Audio playback error:', error);
                     isPlaying = false;
                     if (animationId) {
                         cancelAnimationFrame(animationId);
@@ -892,20 +813,13 @@
                     reject(error);
                 };
                 
-                // Start playing
-                console.log('🚀 Starting audio playback...');
-                currentAudio.play().catch(error => {
-                    console.error('🚨 Failed to start audio:', error);
-                    reject(error);
-                });
+                currentAudio.play().catch(reject);
             });
         }
         
         // Add a pleasant smile after finishing speech
         function addPostSpeechSmile() {
             if (!avatarModel || Object.keys(mouthShapes).length === 0) return;
-            
-            console.log('😊 Setting post-speech smile');
             
             // Apply a gentle smile to all meshes
             Object.values(mouthShapes).forEach(shapeData => {
@@ -921,14 +835,12 @@
                 // Set a pleasant smile
                 if (morphTargets.hasOwnProperty('mouthSmile')) {
                     const smileIndex = morphTargets['mouthSmile'];
-                    mesh.morphTargetInfluences[smileIndex] = 0.4; // Gentle smile
-                    console.log(`✅ Set post-speech smile to 0.4 on ${mesh.name}`);
+                    mesh.morphTargetInfluences[smileIndex] = 0.4;
                 }
             });
             
             // Remove smile after a few seconds
             setTimeout(() => {
-                console.log('😐 Removing post-speech smile');
                 Object.values(mouthShapes).forEach(shapeData => {
                     const morphTargets = shapeData.morphTargets;
                     const mesh = shapeData.mesh;
@@ -938,13 +850,12 @@
                         mesh.morphTargetInfluences[smileIndex] = 0.0;
                     }
                 });
-            }, 2500); // Smile for 2.5 seconds
+            }, 2500);
         }
         
         function setSmile(intensity = 0.5) {
             if (smileBlendShape && smileBlendShape.mesh.morphTargetInfluences) {
                 smileBlendShape.mesh.morphTargetInfluences[smileBlendShape.index] = Math.max(0, Math.min(1, intensity));
-                console.log('Setting smile intensity:', intensity);
             }
         }
         
@@ -952,7 +863,6 @@
             // Clear the original smile blend shape
             if (smileBlendShape && smileBlendShape.mesh.morphTargetInfluences) {
                 smileBlendShape.mesh.morphTargetInfluences[smileBlendShape.index] = 0;
-                console.log('✅ Cleared original smile blend shape');
             }
             
             // Also clear mouthSmile on all mouth shape meshes
@@ -963,7 +873,6 @@
                 if (morphTargets.hasOwnProperty('mouthSmile')) {
                     const smileIndex = morphTargets['mouthSmile'];
                     mesh.morphTargetInfluences[smileIndex] = 0.0;
-                    console.log(`✅ Cleared mouthSmile on ${mesh.name}`);
                 }
             });
         }
@@ -971,8 +880,6 @@
         function startTalking() {
             if (isTalking) return;
             isTalking = true;
-            
-            console.log('Starting talking animation');
             
             // Simple talking animation - only head rotation, no position changes
             function talkingLoop() {
@@ -995,7 +902,6 @@
         
         function stopTalking() {
             isTalking = false;
-            console.log('Stopping talking animation');
             
             if (talkingAnimation) {
                 cancelAnimationFrame(talkingAnimation);
@@ -1007,96 +913,73 @@
                 avatarModel.rotation.x = 0;
                 avatarModel.rotation.y = 0;
                 avatarModel.rotation.z = 0;
-                // Keep position stable at -2.0, no breathing movement
             }
         }
         
         // Test function for manual viseme testing (call from console)
         window.testViseme = function(viseme = 'aa') {
-            console.log('🧪 Manual viseme test:', viseme);
             setViseme(viseme, 1.0);
             setTimeout(() => {
                 setViseme('sil', 0);
-                console.log('🧪 Reset to silent');
             }, 2000);
         };
         
         // Test function to show all available blend shapes
         window.showBlendShapes = function() {
             if (!avatarModel) {
-                console.log('❌ No avatar loaded');
                 return;
             }
             
             avatarModel.traverse(function(child) {
                 if (child.isMesh && child.morphTargetDictionary) {
-                    console.log(`Mesh: ${child.name || 'unnamed'}`);
-                    console.log('All blend shapes:', Object.keys(child.morphTargetDictionary));
+                    // Debug function for checking available blend shapes
                 }
             });
         };
         
         // Test ONLY mouth opening (no smile)
         window.testMouthOpen = function(amount = 0.5) {
-            console.log(`🧪 Testing ONLY mouth open: ${amount}`);
-            if (!avatarModel || Object.keys(mouthShapes).length === 0) {
-                console.log('❌ No mouth shapes available');
-                return;
-            }
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) return;
             
             Object.values(mouthShapes).forEach(shapeData => {
                 const morphTargets = shapeData.morphTargets;
                 const mesh = shapeData.mesh;
                 
-                // Set ONLY mouthOpen
                 if (morphTargets.hasOwnProperty('mouthOpen')) {
                     const openIndex = morphTargets['mouthOpen'];
                     mesh.morphTargetInfluences[openIndex] = amount;
-                    console.log(`✅ Set mouthOpen to ${amount} on ${mesh.name}`);
                 }
                 
-                // Force mouthSmile to 0
                 if (morphTargets.hasOwnProperty('mouthSmile')) {
                     const smileIndex = morphTargets['mouthSmile'];
                     mesh.morphTargetInfluences[smileIndex] = 0.0;
-                    console.log(`✅ Set mouthSmile to 0.0 on ${mesh.name}`);
                 }
             });
         };
         
         // Test ONLY smile (no mouth open)
         window.testSmileOnly = function(amount = 0.5) {
-            console.log(`🧪 Testing ONLY smile: ${amount}`);
-            if (!avatarModel || Object.keys(mouthShapes).length === 0) {
-                console.log('❌ No mouth shapes available');
-                return;
-            }
+            if (!avatarModel || Object.keys(mouthShapes).length === 0) return;
             
             Object.values(mouthShapes).forEach(shapeData => {
                 const morphTargets = shapeData.morphTargets;
                 const mesh = shapeData.mesh;
                 
-                // Force mouthOpen to 0
                 if (morphTargets.hasOwnProperty('mouthOpen')) {
                     const openIndex = morphTargets['mouthOpen'];
                     mesh.morphTargetInfluences[openIndex] = 0.0;
-                    console.log(`✅ Set mouthOpen to 0.0 on ${mesh.name}`);
                 }
                 
-                // Set ONLY mouthSmile
                 if (morphTargets.hasOwnProperty('mouthSmile')) {
                     const smileIndex = morphTargets['mouthSmile'];
                     mesh.morphTargetInfluences[smileIndex] = amount;
-                    console.log(`✅ Set mouthSmile to ${amount} on ${mesh.name}`);
                 }
             });
         };
         
         // Reset mouth to neutral
         window.resetMouth = function() {
-            console.log('🧪 Resetting mouth to neutral');
             if (!avatarModel || Object.keys(mouthShapes).length === 0) {
-                console.log('❌ No mouth shapes available');
                 return;
             }
             
@@ -1114,7 +997,6 @@
                     mesh.morphTargetInfluences[smileIndex] = 0.0;
                 }
             });
-            console.log('✅ Mouth reset to neutral');
         };
 
         // Initialize 3D avatar when page loads
@@ -1174,11 +1056,6 @@
                 // Try to generate speech with AWS Polly (male voice)
                 try {
                     status.textContent = 'Generating speech...';
-                    console.log('Requesting AWS Polly with male voice:', { 
-                        text: aiResponse,
-                        voice: 'Matthew',
-                        gender: 'male'
-                    });
                     
                     const audioResponse = await fetch('/api/speak', {
                         method: 'POST',
@@ -1205,8 +1082,6 @@
                             
                             // Check if we have viseme data for lip sync
                             if (audioData.audio && audioData.visemes) {
-                                console.log('Playing AWS Polly with lip sync - visemes:', audioData.visemes.length);
-                                
                                 status.textContent = 'Speaking with lip sync...';
                                 setAvatarState('speaking');
                                 
@@ -1228,7 +1103,6 @@
                                 
                             } else if (audioData.useBrowserTTS) {
                                 // Handle browser TTS fallback with male voice
-                                console.log('Using browser Speech Synthesis API with male voice');
                                 status.textContent = 'Speaking...';
                                 setAvatarState('speaking');
                                 
@@ -1251,9 +1125,7 @@
                                     
                                     if (maleVoice) {
                                         utterance.voice = maleVoice;
-                                        console.log('Using male voice:', maleVoice.name);
                                     } else {
-                                        console.log('No specific male voice found, using default');
                                     }
                                     
                                     utterance.rate = 0.85; // Slightly slower for deeper sound
@@ -1284,7 +1156,6 @@
                             
                         } else if (contentType && contentType.includes('audio')) {
                             // Legacy audio format (no visemes)
-                            console.log('Playing AWS Polly audio (legacy format)');
                             const audioBlob = await audioResponse.blob();
                             const audioUrl = URL.createObjectURL(audioBlob);
                             const audio = new Audio(audioUrl);
@@ -1317,7 +1188,6 @@
                         }
                         
                     } else {
-                        console.log('TTS not available, showing text only');
                         fallbackToTextDisplay();
                     }
                     
