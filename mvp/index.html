@@ -1078,6 +1078,7 @@
                 // Try to generate speech with AWS Polly (male voice)
                 try {
                     status.textContent = 'Generating speech...';
+                    console.log('🎤 Requesting speech for:', aiResponse);
                     
                     const audioResponse = await fetch('/api/speak', {
                         method: 'POST',
@@ -1097,13 +1098,16 @@
                     
                     if (audioResponse.ok) {
                         const contentType = audioResponse.headers.get('content-type');
+                        console.log('📡 Audio response content-type:', contentType);
                         
                         // Check if it's JSON response (new format with visemes)
                         if (contentType && contentType.includes('application/json')) {
                             const audioData = await audioResponse.json();
+                            console.log('📊 Audio data received:', audioData);
                             
                             // Check if we have viseme data for lip sync
                             if (audioData.audio && audioData.visemes) {
+                                console.log('🎯 AWS Polly with visemes! Count:', audioData.visemes.length);
                                 status.textContent = 'Speaking with lip sync...';
                                 setAvatarState('speaking');
                                 
@@ -1125,6 +1129,7 @@
                                 
                             } else if (audioData.useBrowserTTS) {
                                 // Handle browser TTS fallback with male voice
+                                console.log('🔊 Using browser TTS fallback');
                                 status.textContent = 'Speaking...';
                                 setAvatarState('speaking');
                                 
