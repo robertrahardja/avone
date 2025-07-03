@@ -132,7 +132,7 @@ async function handleChat(request, env, corsHeaders) {
   }
 }
 
-// Handle text-to-speech with AWS Polly
+// Handle text-to-speech with AWS Polly and viseme support
 async function handleSpeak(request, env, corsHeaders) {
   try {
     const { text, voice, voiceId, VoiceId, gender } = await request.json();
@@ -151,20 +151,19 @@ async function handleSpeak(request, env, corsHeaders) {
     if (voiceId) selectedVoice = voiceId;
     if (VoiceId) selectedVoice = VoiceId;
     
-    console.log(`🎤 Using AWS Polly voice: ${selectedVoice} (gender: ${gender || 'male'})`);
-    
     // Try AWS Polly if credentials are available
     if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) {
       try {
-        const pollyResponse = await callAWSPolly(text, selectedVoice, env);
+        const pollyResult = await callAWSPollyWithVisemes(text, selectedVoice, env);
         
-        if (pollyResponse) {
-          console.log(`✅ AWS Polly audio generated with ${selectedVoice} voice`);
-          return new Response(pollyResponse, {
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'audio/mpeg',
-            }
+        if (pollyResult) {
+          return new Response(JSON.stringify({
+            audio: pollyResult.audio,
+            visemes: pollyResult.visemes,
+            duration: pollyResult.duration,
+            voice: selectedVoice
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
           });
         }
       } catch (pollyError) {
@@ -190,18 +189,111 @@ async function handleSpeak(request, env, corsHeaders) {
   }
 }
 
-// AWS Polly integration using AWS API v4 signature
-async function callAWSPolly(text, voiceId, env) {
+// AWS Polly integration with viseme support using aws4fetch
+async function callAWSPollyWithVisemes(text, voiceId, env) {
   try {
-    // This is a simplified version - you might need aws4fetch or similar for proper AWS signing
-    // For now, return null to fallback to browser TTS
-    console.log('AWS Polly integration pending - using browser TTS fallback');
+    // Import aws4fetch for AWS v4 signing
+    const { AwsClient } = await import('aws4fetch');
+    
+    const aws = new AwsClient({
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+      region: env.AWS_REGION || 'us-east-1'
+    });
+    
+    // Get viseme data
+    const visemeParams = new URLSearchParams({
+      'Text': text,
+      'OutputFormat': 'json',
+      'VoiceId': voiceId,
+      'Engine': 'neural',
+      'SpeechMarkTypes.member.1': 'viseme'
+    });
+    
+    const visemeRequest = new Request(
+      `https://polly.${env.AWS_REGION || 'us-east-1'}.amazonaws.com/v1/speech`, 
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-amz-json-1.0',
+          'X-Amz-Target': 'Polly.SynthesizeSpeech'
+        },
+        body: visemeParams
+      }
+    );
+    
+    // Get audio data
+    const audioParams = new URLSearchParams({
+      'Text': text,
+      'OutputFormat': 'mp3',
+      'VoiceId': voiceId,
+      'Engine': 'neural'
+    });
+    
+    const audioRequest = new Request(
+      `https://polly.${env.AWS_REGION || 'us-east-1'}.amazonaws.com/v1/speech`,
+      {
+        method: 'POST', 
+        headers: {
+          'Content-Type': 'application/x-amz-json-1.0',
+          'X-Amz-Target': 'Polly.SynthesizeSpeech'
+        },
+        body: audioParams
+      }
+    );
+    
+    // Sign and execute both requests
+    const [visemeResponse, audioResponse] = await Promise.all([
+      aws.fetch(visemeRequest),
+      aws.fetch(audioRequest)
+    ]);
+    
+    if (visemeResponse.ok && audioResponse.ok) {
+      // Process visemes
+      const visemeText = await visemeResponse.text();
+      const visemes = parseVisemes(visemeText);
+      
+      // Process audio
+      const audioBuffer = await audioResponse.arrayBuffer();
+      const audioBase64 = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
+      const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
+      
+      return {
+        audio: audioDataUrl,
+        visemes: visemes,
+        duration: calculateDuration(visemes)
+      };
+    }
+    
     return null;
     
   } catch (error) {
     console.error('AWS Polly error:', error);
     return null;
   }
+}
+
+// Parse viseme data from AWS Polly
+function parseVisemes(visemeData) {
+  try {
+    const lines = visemeData.trim().split('\n');
+    return lines.map(line => {
+      const data = JSON.parse(line);
+      return {
+        time: data.time / 1000, // Convert to seconds
+        viseme: data.value
+      };
+    }).filter(viseme => viseme.viseme !== undefined);
+  } catch (error) {
+    console.error('Error parsing visemes:', error);
+    return [];
+  }
+}
+
+// Calculate approximate duration
+function calculateDuration(visemes) {
+  if (visemes.length === 0) return 0;
+  return Math.max(...visemes.map(v => v.time)) + 0.5;
 }
 
 // Fallback responses when OpenAI is not available
