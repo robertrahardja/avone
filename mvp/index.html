@@ -1056,7 +1056,7 @@
             responseDisplay.style.display = 'none';
             
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('http://localhost:3000/api/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1079,7 +1079,7 @@
                 try {
                     status.textContent = 'Generating speech...';
                     
-                    const audioResponse = await fetch('/api/speak', {
+                    const audioResponse = await fetch('http://localhost:3000/api/speak', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
