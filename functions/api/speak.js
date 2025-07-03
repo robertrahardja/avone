@@ -74,25 +74,81 @@ export async function onRequestOptions() {
   });
 }
 
-// AWS Polly integration with viseme support
+// AWS Polly integration using AWS REST API with proper v4 signing
 async function callAWSPollyWithVisemes(text, voiceId, env) {
   try {
-    // For Cloudflare Workers/Pages, we need to use the AWS API directly
-    // This is a simplified version - for production, you'd use proper AWS signing
-    
     const region = env.AWS_REGION || 'ap-southeast-1';
     
-    // Create AWS signature v4 (simplified version)
-    const accessKeyId = env.AWS_ACCESS_KEY_ID;
-    const secretAccessKey = env.AWS_SECRET_ACCESS_KEY;
+    // Import AWS signing library for Cloudflare Workers
+    const { AwsClient } = await import('aws4fetch');
     
-    // Note: This is a simplified implementation
-    // For production, you'd need proper AWS v4 signature
-    console.log('AWS Polly integration would go here');
-    console.log('Voice:', voiceId, 'Region:', region);
+    const aws = new AwsClient({
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+      region: region
+    });
     
-    // For now, return null to fall back to browser TTS
-    // In production, implement proper AWS Polly integration
+    // Parameters for viseme request
+    const visemeParams = {
+      Text: text,
+      OutputFormat: 'json',
+      VoiceId: voiceId,
+      Engine: 'neural',
+      SpeechMarkTypes: ['viseme']
+    };
+    
+    // Parameters for audio request
+    const audioParams = {
+      Text: text,
+      OutputFormat: 'mp3',
+      VoiceId: voiceId,
+      Engine: 'neural'
+    };
+    
+    // Create requests
+    const visemeRequest = new Request(`https://polly.${region}.amazonaws.com/v1/speech`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.0'
+      },
+      body: JSON.stringify(visemeParams)
+    });
+    
+    const audioRequest = new Request(`https://polly.${region}.amazonaws.com/v1/speech`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.0'
+      },
+      body: JSON.stringify(audioParams)
+    });
+    
+    // Sign and execute requests
+    const [visemeResponse, audioResponse] = await Promise.all([
+      aws.fetch(visemeRequest),
+      aws.fetch(audioRequest)
+    ]);
+    
+    if (visemeResponse.ok && audioResponse.ok) {
+      // Process visemes
+      const visemeText = await visemeResponse.text();
+      const visemes = parseVisemes(visemeText);
+      
+      // Process audio
+      const audioArrayBuffer = await audioResponse.arrayBuffer();
+      const audioBase64 = btoa(String.fromCharCode(...new Uint8Array(audioArrayBuffer)));
+      const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
+      
+      return {
+        audio: audioDataUrl,
+        visemes: visemes,
+        duration: calculateDuration(visemes)
+      };
+    }
+    
+    console.error('AWS Polly API responses not OK:', {
+      visemeStatus: visemeResponse.status,
+      audioStatus: audioResponse.status
+    });
     return null;
     
   } catch (error) {
