@@ -44,6 +44,20 @@ export async function onRequestPost(context) {
       }
     }
     
+    // Generate mock visemes for browser TTS to enable lip sync
+    const mockVisemes = generateMockVisemes(text);
+    if (mockVisemes.length > 0) {
+      return new Response(JSON.stringify({
+        useBrowserTTS: true,
+        text: text,
+        visemes: mockVisemes,
+        duration: calculateDuration(mockVisemes),
+        message: 'Using browser TTS with generated visemes'
+      }), {
+        headers: corsHeaders
+      });
+    }
+    
     // Fallback: Return instruction for browser's Speech Synthesis API
     return new Response(JSON.stringify({
       useBrowserTTS: true,
@@ -256,4 +270,71 @@ function parseVisemes(visemeData) {
 function calculateDuration(visemes) {
   if (visemes.length === 0) return 0;
   return Math.max(...visemes.map(v => v.time)) + 0.5;
+}
+
+// Generate mock visemes based on text analysis for browser TTS
+function generateMockVisemes(text) {
+  const visemes = [];
+  const words = text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+  let currentTime = 0;
+  const wordDuration = 0.4; // Average word duration in seconds
+  const pauseDuration = 0.1; // Pause between words
+  
+  // Vowel to viseme mapping
+  const vowelMapping = {
+    'a': 'a', 'e': 'e', 'i': 'i', 'o': 'o', 'u': 'u',
+    'y': 'i', 'ae': 'a', 'ai': 'a', 'au': 'o', 'aw': 'o',
+    'ay': 'a', 'ea': 'e', 'ee': 'i', 'ei': 'a', 'eu': 'u',
+    'ey': 'e', 'ie': 'i', 'oa': 'o', 'oo': 'u', 'ou': 'o',
+    'ow': 'o', 'oy': 'o', 'ue': 'u', 'ui': 'u', 'uy': 'u'
+  };
+  
+  // Consonant to viseme mapping
+  const consonantMapping = {
+    'b': 'p', 'p': 'p', 'm': 'p',           // Bilabial
+    'f': 'f', 'v': 'f',                     // Labiodental  
+    't': 't', 'd': 't', 'n': 't', 'l': 't', // Alveolar
+    's': 's', 'z': 's', 'sh': 's', 'zh': 's', // Sibilant
+    'k': 'k', 'g': 'k', 'ng': 'k',         // Velar
+    'r': 'r', 'w': 'u', 'y': 'i', 'h': 'sil' // Approximants
+  };
+  
+  visemes.push({ time: currentTime, viseme: 'sil' });
+  
+  words.forEach((word, wordIndex) => {
+    if (word.length === 0) return;
+    
+    const syllableDuration = wordDuration / Math.max(1, Math.ceil(word.length / 3));
+    
+    for (let i = 0; i < word.length; i++) {
+      const char = word[i];
+      let viseme = 'sil';
+      
+      // Check for vowels first
+      if ('aeiou'.includes(char)) {
+        viseme = vowelMapping[char] || 'a';
+      } else if (consonantMapping[char]) {
+        viseme = consonantMapping[char];
+      } else {
+        // Default consonant mapping
+        viseme = 't';
+      }
+      
+      const charTime = currentTime + (i * syllableDuration / word.length);
+      visemes.push({ time: charTime, viseme: viseme });
+    }
+    
+    currentTime += wordDuration;
+    
+    // Add pause between words (except last word)
+    if (wordIndex < words.length - 1) {
+      visemes.push({ time: currentTime, viseme: 'sil' });
+      currentTime += pauseDuration;
+    }
+  });
+  
+  // End with silence
+  visemes.push({ time: currentTime, viseme: 'sil' });
+  
+  return visemes;
 }

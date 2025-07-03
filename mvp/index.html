@@ -746,6 +746,101 @@
             }
         }
         
+        // Play browser TTS with lip sync animation
+        async function playBrowserTTSWithLipSync(text, visemes) {
+            return new Promise((resolve, reject) => {
+                if (!('speechSynthesis' in window)) {
+                    reject(new Error('Speech synthesis not supported'));
+                    return;
+                }
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                
+                // Set male voice
+                const voices = speechSynthesis.getVoices();
+                const maleVoice = voices.find(voice => 
+                    voice.name.toLowerCase().includes('eddy') ||
+                    voice.name.toLowerCase().includes('fred') ||
+                    voice.name.toLowerCase().includes('daniel') ||
+                    voice.name.toLowerCase().includes('david') ||
+                    voice.name.toLowerCase().includes('mark') ||
+                    (voice.lang.startsWith('en') && voice.gender === 'male')
+                );
+                
+                if (maleVoice) {
+                    utterance.voice = maleVoice;
+                }
+                
+                utterance.rate = 0.85;
+                utterance.pitch = 0.6;
+                utterance.volume = 0.8;
+                
+                let visemeIndex = 0;
+                let animationId = null;
+                let startTime = null;
+                let isPlaying = true;
+                
+                const animateLipSync = () => {
+                    if (!isPlaying) return;
+                    
+                    const elapsed = startTime ? (Date.now() - startTime) / 1000 : 0;
+                    
+                    // Find the current viseme based on elapsed time
+                    let targetIndex = visemeIndex;
+                    for (let i = 0; i < visemes.length; i++) {
+                        if (visemes[i].time <= elapsed) {
+                            targetIndex = i;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    // Update viseme if changed
+                    if (targetIndex !== visemeIndex) {
+                        visemeIndex = targetIndex;
+                        const currentViseme = visemes[visemeIndex];
+                        setViseme(currentViseme.viseme);
+                    }
+                    
+                    // Continue animation
+                    if (isPlaying) {
+                        animationId = requestAnimationFrame(animateLipSync);
+                    }
+                };
+                
+                utterance.onstart = () => {
+                    startTime = Date.now();
+                    animationId = requestAnimationFrame(animateLipSync);
+                };
+                
+                utterance.onend = () => {
+                    isPlaying = false;
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                    }
+                    setViseme('sil');
+                    
+                    // Add post-speech smile
+                    setTimeout(() => {
+                        addPostSpeechSmile();
+                    }, 200);
+                    
+                    resolve();
+                };
+                
+                utterance.onerror = (error) => {
+                    isPlaying = false;
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                    }
+                    setViseme('sil');
+                    reject(error);
+                };
+                
+                speechSynthesis.speak(utterance);
+            });
+        }
+        
         // Play audio with lip sync animation
         async function playAudioWithLipSync(audioDataUrl, visemes) {
             return new Promise((resolve, reject) => {
@@ -1128,12 +1223,21 @@
                                 }
                                 
                             } else if (audioData.useBrowserTTS) {
-                                // Handle browser TTS fallback with male voice
-                                console.log('🔊 Using browser TTS fallback');
-                                status.textContent = 'Speaking...';
-                                setAvatarState('speaking');
+                                // Handle browser TTS with or without visemes
+                                if (audioData.visemes && audioData.visemes.length > 0) {
+                                    console.log('🎯 Browser TTS with generated visemes! Count:', audioData.visemes.length);
+                                    status.textContent = 'Speaking with lip sync...';
+                                    setAvatarState('speaking');
+                                    
+                                    // Play browser TTS with lip sync
+                                    await playBrowserTTSWithLipSync(audioData.text, audioData.visemes);
+                                } else {
+                                    console.log('🔊 Using browser TTS fallback (no visemes)');
+                                    status.textContent = 'Speaking...';
+                                    setAvatarState('speaking');
+                                }
                                 
-                                if ('speechSynthesis' in window) {
+                                if ('speechSynthesis' in window && (!audioData.visemes || audioData.visemes.length === 0)) {
                                     const utterance = new SpeechSynthesisUtterance(audioData.text);
                                     
                                     // Set male voice - prioritize Eddy on macOS
