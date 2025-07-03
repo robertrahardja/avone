@@ -418,6 +418,25 @@
                         if (child.isMesh) {
                             child.castShadow = true;
                             child.receiveShadow = true;
+                            
+                            // Debug: Check for morph targets on each mesh
+                            if (child.morphTargetDictionary) {
+                                console.log('🔍 Found mesh with morph targets:', child.name);
+                                console.log('Available morph targets:', Object.keys(child.morphTargetDictionary));
+                                
+                                // Check specifically for viseme blend shapes
+                                const visemeTargets = Object.keys(child.morphTargetDictionary).filter(key => 
+                                    key.toLowerCase().includes('viseme') || 
+                                    key.toLowerCase().includes('mouth') ||
+                                    key.toLowerCase().includes('jaw')
+                                );
+                                
+                                if (visemeTargets.length > 0) {
+                                    console.log('✅ Found viseme targets:', visemeTargets);
+                                } else {
+                                    console.log('❌ No viseme targets found in this mesh');
+                                }
+                            }
                         }
                     });
                     
@@ -433,6 +452,9 @@
                     
                     isModelLoaded = true;
                     console.log('3D Avatar loaded successfully');
+                    
+                    // Initialize blend shapes after model loads
+                    findBones();
                 },
                 function(progress) {
                     console.log('Loading progress:', (progress.loaded / progress.total * 100) + '%');
@@ -512,6 +534,51 @@
         let jawBone = null;
         let faceMesh = null;
         let smileBlendShape = null;
+        let mouthShapes = {};
+        let currentAudio = null;
+        let isPlaying = false;
+        
+        // AWS Polly viseme mapping for basic mouth shapes (mouthOpen, mouthSmile)
+        const visemeToMouthShape = {
+            // Silence
+            'sil': { open: 0.0, smile: 0.0 },
+            
+            // Consonants - lowercase as returned by AWS Polly
+            'p': { open: 0.0, smile: 0.0 },     // P, B, M - lips closed
+            'f': { open: 0.1, smile: 0.0 },     // F, V - lips slightly open
+            't': { open: 0.3, smile: 0.0 },     // T, D, N, L - tongue tip to roof
+            'S': { open: 0.1, smile: 0.0 },     // S, Z - tongue tip down (uppercase S)
+            's': { open: 0.1, smile: 0.0 },     // S, Z - tongue tip down (lowercase s)
+            'r': { open: 0.2, smile: 0.0 },     // R - tongue pulled back
+            'k': { open: 0.2, smile: 0.0 },     // K, G - back of tongue up
+            
+            // Vowels - lowercase as returned by AWS Polly
+            'a': { open: 0.8, smile: 0.0 },     // AH, AA - wide open
+            'e': { open: 0.4, smile: 0.3 },     // EH, EY - medium open, slight smile
+            'i': { open: 0.2, smile: 0.5 },     // IH, IY - small opening, smile
+            'o': { open: 0.6, smile: 0.0 },     // OH, OW - round mouth
+            'u': { open: 0.3, smile: 0.0 },     // UH, UW - small round opening
+            '@': { open: 0.5, smile: 0.0 },     // Schwa - medium open
+            
+            // Uppercase versions (AWS Polly sometimes uses these)
+            'PP': { open: 0.0, smile: 0.0 },
+            'FF': { open: 0.1, smile: 0.0 },
+            'TH': { open: 0.2, smile: 0.0 },
+            'DD': { open: 0.3, smile: 0.0 },
+            'kk': { open: 0.2, smile: 0.0 },
+            'CH': { open: 0.1, smile: 0.0 },
+            'SS': { open: 0.1, smile: 0.0 },
+            'nn': { open: 0.1, smile: 0.0 },
+            'RR': { open: 0.2, smile: 0.0 },
+            'aa': { open: 0.8, smile: 0.0 },
+            'E': { open: 0.4, smile: 0.3 },
+            'I': { open: 0.2, smile: 0.5 },
+            'O': { open: 0.6, smile: 0.0 },
+            'U': { open: 0.3, smile: 0.0 },
+            
+            // Special cases
+            'T': { open: 0.3, smile: 0.0 }      // Sometimes uppercase T
+        };
         
         function setAvatarState(state) {
             avatar.className = 'avatar';
@@ -574,8 +641,9 @@
                     faceMesh = child;
                     console.log('Found face mesh with morph targets:', Object.keys(child.morphTargetDictionary));
                     
-                    // Look for smile-related blend shapes
                     const morphTargets = child.morphTargetDictionary;
+                    
+                    // Look for smile-related blend shapes
                     for (let target in morphTargets) {
                         const targetName = target.toLowerCase();
                         if (targetName.includes('smile') || targetName.includes('happy') || targetName.includes('joy')) {
@@ -584,7 +652,178 @@
                             break;
                         }
                     }
+                    
+                    // Look for basic mouth shapes (mouthOpen, mouthSmile)
+                    const hasMouthShapes = morphTargets.hasOwnProperty('mouthOpen') || 
+                                         morphTargets.hasOwnProperty('mouthSmile') ||
+                                         Object.keys(morphTargets).some(key => key.toLowerCase().includes('mouth'));
+                    
+                    if (hasMouthShapes) {
+                        mouthShapes[child.uuid] = {
+                            mesh: child,
+                            morphTargets: morphTargets
+                        };
+                        console.log(`✅ Found mouth shapes for lip sync on ${child.name}:`, 
+                                  Object.keys(morphTargets).filter(key => key.toLowerCase().includes('mouth')));
+                    }
                 }
+            });
+            
+            if (Object.keys(mouthShapes).length > 0) {
+                console.log(`🎉 Lip sync ready! Found ${Object.keys(mouthShapes).length} meshes with mouth shapes`);
+            } else {
+                console.log('❌ No mouth shapes found for lip sync');
+            }
+        }
+        
+        // Set viseme using basic mouth shapes (mouthOpen, mouthSmile)
+        function setViseme(viseme, weight = 1.0) {
+            console.log(`🗣️ setViseme called: ${viseme} with weight ${weight}`);
+            
+            if (!avatarModel) {
+                console.log('❌ No avatar model loaded');
+                return;
+            }
+            
+            if (Object.keys(mouthShapes).length === 0) {
+                console.log('❌ No mouth shapes found');
+                return;
+            }
+            
+            const mouthShape = visemeToMouthShape[viseme];
+            if (!mouthShape) {
+                console.log(`❌ No mouth shape mapping for viseme: ${viseme}`);
+                return;
+            }
+            
+            console.log(`🎯 Setting mouth: open=${mouthShape.open}, smile=${mouthShape.smile}`);
+            
+            // Apply mouth shapes to all meshes that have them
+            let shapesApplied = 0;
+            Object.values(mouthShapes).forEach(shapeData => {
+                const morphTargets = shapeData.morphTargets;
+                const mesh = shapeData.mesh;
+                
+                // Set mouthOpen
+                if (morphTargets.hasOwnProperty('mouthOpen')) {
+                    const openIndex = morphTargets['mouthOpen'];
+                    mesh.morphTargetInfluences[openIndex] = mouthShape.open * weight;
+                    shapesApplied++;
+                    console.log(`✅ Set mouthOpen to ${mouthShape.open * weight} on ${mesh.name}`);
+                }
+                
+                // Set mouthSmile
+                if (morphTargets.hasOwnProperty('mouthSmile')) {
+                    const smileIndex = morphTargets['mouthSmile'];
+                    mesh.morphTargetInfluences[smileIndex] = mouthShape.smile * weight;
+                    shapesApplied++;
+                    console.log(`✅ Set mouthSmile to ${mouthShape.smile * weight} on ${mesh.name}`);
+                }
+            });
+            
+            if (shapesApplied === 0) {
+                console.log(`❌ No mouth shapes applied`);
+            } else {
+                console.log(`✅ Applied ${shapesApplied} mouth shape changes`);
+            }
+        }
+        
+        // Play audio with lip sync animation
+        async function playAudioWithLipSync(audioDataUrl, visemes) {
+            return new Promise((resolve, reject) => {
+                // Create audio element
+                currentAudio = new Audio(audioDataUrl);
+                isPlaying = true;
+                
+                let visemeIndex = 0;
+                let animationId = null;
+                let audioStartTime = null;
+                
+                console.log(`🎬 Starting lip sync with ${visemes.length} visemes`);
+                
+                const animateLipSync = () => {
+                    if (!isPlaying || !currentAudio) {
+                        console.log('🛑 Stopping lip sync animation');
+                        return;
+                    }
+                    
+                    // Use audio's currentTime for more accurate sync
+                    const elapsed = currentAudio.currentTime;
+                    
+                    // Find the current viseme based on audio time
+                    let targetIndex = visemeIndex;
+                    
+                    // Look ahead to find the right viseme for current time
+                    for (let i = 0; i < visemes.length; i++) {
+                        if (visemes[i].time <= elapsed) {
+                            targetIndex = i;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    // Only update if we've moved to a new viseme
+                    if (targetIndex !== visemeIndex) {
+                        visemeIndex = targetIndex;
+                        const currentViseme = visemes[visemeIndex];
+                        setViseme(currentViseme.viseme);
+                        console.log(`🎵 Lip sync: ${currentViseme.viseme} at ${elapsed.toFixed(2)}s`);
+                    }
+                    
+                    // Continue animation while audio is playing
+                    if (!currentAudio.paused && !currentAudio.ended) {
+                        animationId = requestAnimationFrame(animateLipSync);
+                    } else {
+                        console.log('🏁 Audio ended or paused, stopping lip sync');
+                        isPlaying = false;
+                        setViseme('sil');
+                    }
+                };
+                
+                currentAudio.onloadeddata = () => {
+                    console.log('📱 Audio loaded, duration:', currentAudio.duration);
+                };
+                
+                currentAudio.onplay = () => {
+                    console.log('▶️ Audio started playing');
+                    audioStartTime = Date.now();
+                    animationId = requestAnimationFrame(animateLipSync);
+                };
+                
+                currentAudio.onended = () => {
+                    console.log('🏁 Audio playback ended');
+                    isPlaying = false;
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                    }
+                    setViseme('sil'); // Reset to silent
+                    resolve();
+                };
+                
+                currentAudio.onpause = () => {
+                    console.log('⏸️ Audio paused');
+                    isPlaying = false;
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                    }
+                };
+                
+                currentAudio.onerror = (error) => {
+                    console.error('🚨 Audio playback error:', error);
+                    isPlaying = false;
+                    if (animationId) {
+                        cancelAnimationFrame(animationId);
+                    }
+                    setViseme('sil');
+                    reject(error);
+                };
+                
+                // Start playing
+                console.log('🚀 Starting audio playback...');
+                currentAudio.play().catch(error => {
+                    console.error('🚨 Failed to start audio:', error);
+                    reject(error);
+                });
             });
         }
         
@@ -644,6 +883,31 @@
             }
         }
         
+        // Test function for manual viseme testing (call from console)
+        window.testViseme = function(viseme = 'aa') {
+            console.log('🧪 Manual viseme test:', viseme);
+            setViseme(viseme, 1.0);
+            setTimeout(() => {
+                setViseme('sil', 0);
+                console.log('🧪 Reset to silent');
+            }, 2000);
+        };
+        
+        // Test function to show all available blend shapes
+        window.showBlendShapes = function() {
+            if (!avatarModel) {
+                console.log('❌ No avatar loaded');
+                return;
+            }
+            
+            avatarModel.traverse(function(child) {
+                if (child.isMesh && child.morphTargetDictionary) {
+                    console.log(`Mesh: ${child.name || 'unnamed'}`);
+                    console.log('All blend shapes:', Object.keys(child.morphTargetDictionary));
+                }
+            });
+        };
+
         // Initialize 3D avatar when page loads
         window.addEventListener('load', init3DAvatar);
         
@@ -726,41 +990,35 @@
                     if (audioResponse.ok) {
                         const contentType = audioResponse.headers.get('content-type');
                         
-                        // Check if it's audio (AWS Polly) or JSON (browser TTS instruction)
-                        if (contentType && contentType.includes('audio')) {
-                            console.log('Playing AWS Polly male voice audio');
-                            const audioBlob = await audioResponse.blob();
-                            const audioUrl = URL.createObjectURL(audioBlob);
-                            const audio = new Audio(audioUrl);
-                            
-                            status.textContent = 'Speaking...';
-                            setAvatarState('speaking');
-                            
-                            audio.play().catch(error => {
-                                console.error('Audio play failed:', error);
-                                fallbackToTextDisplay();
-                            });
-                            
-                            audio.onended = () => {
-                                status.textContent = 'Ready';
-                                setAvatarState('idle');
-                                URL.revokeObjectURL(audioUrl);
-                                
-                                setTimeout(() => {
-                                    responseDisplay.style.display = 'none';
-                                }, 3000);
-                            };
-                            
-                            audio.onerror = () => {
-                                console.error('Audio playback failed');
-                                fallbackToTextDisplay();
-                            };
-                            
-                        } else {
-                            // Handle browser TTS fallback with male voice
+                        // Check if it's JSON response (new format with visemes)
+                        if (contentType && contentType.includes('application/json')) {
                             const audioData = await audioResponse.json();
                             
-                            if (audioData.useBrowserTTS) {
+                            // Check if we have viseme data for lip sync
+                            if (audioData.audio && audioData.visemes) {
+                                console.log('Playing AWS Polly with lip sync - visemes:', audioData.visemes.length);
+                                
+                                status.textContent = 'Speaking with lip sync...';
+                                setAvatarState('speaking');
+                                
+                                try {
+                                    // Play audio with lip sync
+                                    await playAudioWithLipSync(audioData.audio, audioData.visemes);
+                                    
+                                    status.textContent = 'Ready';
+                                    setAvatarState('idle');
+                                    
+                                    setTimeout(() => {
+                                        responseDisplay.style.display = 'none';
+                                    }, 3000);
+                                    
+                                } catch (error) {
+                                    console.error('Lip sync playback failed:', error);
+                                    fallbackToTextDisplay();
+                                }
+                                
+                            } else if (audioData.useBrowserTTS) {
+                                // Handle browser TTS fallback with male voice
                                 console.log('Using browser Speech Synthesis API with male voice');
                                 status.textContent = 'Speaking...';
                                 setAvatarState('speaking');
@@ -814,6 +1072,39 @@
                             } else {
                                 fallbackToTextDisplay();
                             }
+                            
+                        } else if (contentType && contentType.includes('audio')) {
+                            // Legacy audio format (no visemes)
+                            console.log('Playing AWS Polly audio (legacy format)');
+                            const audioBlob = await audioResponse.blob();
+                            const audioUrl = URL.createObjectURL(audioBlob);
+                            const audio = new Audio(audioUrl);
+                            
+                            status.textContent = 'Speaking...';
+                            setAvatarState('speaking');
+                            
+                            audio.play().catch(error => {
+                                console.error('Audio play failed:', error);
+                                fallbackToTextDisplay();
+                            });
+                            
+                            audio.onended = () => {
+                                status.textContent = 'Ready';
+                                setAvatarState('idle');
+                                URL.revokeObjectURL(audioUrl);
+                                
+                                setTimeout(() => {
+                                    responseDisplay.style.display = 'none';
+                                }, 3000);
+                            };
+                            
+                            audio.onerror = () => {
+                                console.error('Audio playback failed');
+                                fallbackToTextDisplay();
+                            };
+                            
+                        } else {
+                            fallbackToTextDisplay();
                         }
                         
                     } else {

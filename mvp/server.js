@@ -93,7 +93,7 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// Text-to-speech endpoint
+// Text-to-speech endpoint with viseme support
 app.post('/api/speak', async (req, res) => {
     try {
         const { text, voice, voiceId, VoiceId, gender } = req.body;
@@ -111,33 +111,66 @@ app.post('/api/speak', async (req, res) => {
         
         console.log(`🎤 Using AWS Polly voice: ${selectedVoice} (gender: ${gender || 'male'})`);
         
-        // Try AWS Polly first
+        // Try AWS Polly first with viseme data
         if (pollyClient) {
             try {
-                const params = {
+                // Get viseme data
+                const visemeParams = {
+                    Text: text,
+                    OutputFormat: 'json',
+                    VoiceId: selectedVoice,
+                    Engine: 'neural',
+                    SpeechMarkTypes: ['viseme']
+                };
+
+                // Get audio data
+                const audioParams = {
                     Text: text,
                     OutputFormat: 'mp3',
                     VoiceId: selectedVoice,
                     Engine: 'neural'
                 };
-                
-                const command = new SynthesizeSpeechCommand(params);
-                const data = await pollyClient.send(command);
-                
-                if (data.AudioStream) {
-                    const chunks = [];
-                    for await (const chunk of data.AudioStream) {
-                        chunks.push(chunk);
+
+                // Execute both requests in parallel
+                const [visemeCommand, audioCommand] = [
+                    new SynthesizeSpeechCommand(visemeParams),
+                    new SynthesizeSpeechCommand(audioParams)
+                ];
+
+                const [visemeData, audioData] = await Promise.all([
+                    pollyClient.send(visemeCommand),
+                    pollyClient.send(audioCommand)
+                ]);
+
+                if (audioData.AudioStream && visemeData.AudioStream) {
+                    // Process audio
+                    const audioChunks = [];
+                    for await (const chunk of audioData.AudioStream) {
+                        audioChunks.push(chunk);
                     }
-                    const audioBuffer = Buffer.concat(chunks);
+                    const audioBuffer = Buffer.concat(audioChunks);
                     
-                    res.set({
-                        'Content-Type': 'audio/mpeg',
-                        'Content-Length': audioBuffer.length,
+                    // Process visemes
+                    const visemeChunks = [];
+                    for await (const chunk of visemeData.AudioStream) {
+                        visemeChunks.push(chunk);
+                    }
+                    const visemeBuffer = Buffer.concat(visemeChunks);
+                    const visemes = parseVisemes(visemeBuffer.toString());
+                    
+                    // Convert audio to base64
+                    const audioBase64 = audioBuffer.toString('base64');
+                    const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
+
+                    console.log(`✅ AWS Polly generated ${visemes.length} visemes with ${selectedVoice} voice`);
+                    console.log('First few visemes:', visemes.slice(0, 5));
+
+                    res.json({
+                        audio: audioDataUrl,
+                        visemes: visemes,
+                        duration: calculateDuration(visemes),
+                        voice: selectedVoice
                     });
-                    
-                    res.send(audioBuffer);
-                    console.log(`✅ AWS Polly audio generated with ${selectedVoice} voice`);
                     return;
                 }
             } catch (pollyError) {
@@ -159,6 +192,29 @@ app.post('/api/speak', async (req, res) => {
         res.status(500).json({ error: 'Text-to-speech failed' });
     }
 });
+
+// Parse viseme data from AWS Polly
+function parseVisemes(visemeData) {
+    try {
+        const lines = visemeData.trim().split('\n');
+        return lines.map(line => {
+            const data = JSON.parse(line);
+            return {
+                time: data.time / 1000, // Convert to seconds
+                viseme: data.value
+            };
+        }).filter(viseme => viseme.viseme !== undefined);
+    } catch (error) {
+        console.error('Error parsing visemes:', error);
+        return [];
+    }
+}
+
+// Calculate approximate duration
+function calculateDuration(visemes) {
+    if (visemes.length === 0) return 0;
+    return Math.max(...visemes.map(v => v.time)) + 0.5;
+}
 
 // Fallback responses when OpenAI is not available
 function getFallbackResponse(message) {
