@@ -1,5 +1,0 @@
-# Cloudflare Pages build configuration
-# This ensures the correct files are deployed
-
-# Use root directory
-pages_build_output_dir = "."
