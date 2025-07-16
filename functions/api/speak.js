@@ -1,4 +1,4 @@
-// Updated functions/api/speak.js for Indonesian voices
+// Cloudflare Pages Function for /api/speak with AWS Polly
 export async function onRequestPost(context) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -8,7 +8,7 @@ export async function onRequestPost(context) {
   };
 
   try {
-    const { text, voice, voiceId, VoiceId, gender, language = 'id' } = await context.request.json();
+    const { text, voice, voiceId, VoiceId, gender } = await context.request.json();
     
     if (!text) {
       return new Response(JSON.stringify({ error: 'Text is required' }), {
@@ -17,28 +17,30 @@ export async function onRequestPost(context) {
       });
     }
     
-    // Indonesian voice selection
-    let selectedVoice = getIndonesianVoice(voice, voiceId, VoiceId, gender, language);
+    // Determine voice to use (prioritize male voices)
+    let selectedVoice = 'Matthew'; // Default male voice
     
-    // Try ElevenLabs if API key is available
-    if (context.env.ELEVENLABS_API_KEY) {
+    if (voice) selectedVoice = voice;
+    if (voiceId) selectedVoice = voiceId;
+    if (VoiceId) selectedVoice = VoiceId;
+    
+    // Try AWS Polly if credentials are available
+    if (context.env.AWS_ACCESS_KEY_ID && context.env.AWS_SECRET_ACCESS_KEY) {
       try {
-        const elevenLabsResult = await callElevenLabsTTS(text, selectedVoice, language, context.env);
+        const pollyResult = await callAWSPollyWithVisemes(text, selectedVoice, context.env);
         
-        if (elevenLabsResult) {
+        if (pollyResult) {
           return new Response(JSON.stringify({
-            audio: elevenLabsResult.audio,
-            visemes: elevenLabsResult.visemes,
-            duration: elevenLabsResult.duration,
-            voice: selectedVoice,
-            language: language,
-            provider: 'elevenlabs'
+            audio: pollyResult.audio,
+            visemes: pollyResult.visemes,
+            duration: pollyResult.duration,
+            voice: selectedVoice
           }), {
             headers: corsHeaders
           });
         }
-      } catch (elevenLabsError) {
-        console.error('ElevenLabs error:', elevenLabsError.message);
+      } catch (pollyError) {
+        console.error('AWS Polly error:', pollyError.message);
       }
     }
     
@@ -46,9 +48,7 @@ export async function onRequestPost(context) {
     return new Response(JSON.stringify({
       useBrowserTTS: true,
       text: text,
-      voice: selectedVoice,
-      language: language,
-      message: `Using browser text-to-speech for ${language === 'id' ? 'Indonesian' : 'English'}`
+      message: 'Using browser text-to-speech'
     }), {
       headers: corsHeaders
     });
@@ -74,90 +74,159 @@ export async function onRequestOptions() {
   });
 }
 
-// Select appropriate voice for language
-function getIndonesianVoice(voice, voiceId, VoiceId, gender, language) {
-  // If specific voice provided, use it
-  if (voice) return voice;
-  if (voiceId) return voiceId;
-  if (VoiceId) return VoiceId;
-  
-  // ElevenLabs supports Indonesian directly
-  if (language === 'id') {
-    // Use Indonesian voices for Indonesian
-    if (gender === 'male' || !gender) {
-      return 'andi'; // Andi - Indonesian Male voice
-    } else {
-      return 'indonesian-female'; // ElevenLabs Indonesian Female voice
-    }
-  } else {
-    // Default English voices for ElevenLabs
-    if (gender === 'male' || !gender) {
-      return 'adam'; // ElevenLabs English Male
-    } else {
-      return 'rachel'; // ElevenLabs English Female
-    }
-  }
-}
-
-// ElevenLabs TTS integration
-async function callElevenLabsTTS(text, voiceId, language, env) {
+// AWS Polly integration with viseme support
+async function callAWSPollyWithVisemes(text, voiceId, env) {
   try {
-    const apiKey = env.ELEVENLABS_API_KEY;
+    const region = env.AWS_REGION || 'us-east-1';
+    const accessKeyId = env.AWS_ACCESS_KEY_ID;
+    const secretAccessKey = env.AWS_SECRET_ACCESS_KEY;
     
-    // Map voice names to actual ElevenLabs voice IDs
-    const voiceMap = {
-      'indonesian-male': 'TMvmhlKUioQA4U7LOoko', // Andi - Indonesian male voice
-      'andi': 'TMvmhlKUioQA4U7LOoko', // Direct Andi voice mapping
-      'indonesian-female': 'AZnzlk1XvdvUeBnXmlld', // Default female voice
-      'adam': 'pNInz6obpgDQGcFmaJgB', // Adam (male)
-      'rachel': 'AZnzlk1XvdvUeBnXmlld' // Rachel (female)
-    };
+    // Get viseme data and audio in parallel
+    const [visemeData, audioData] = await Promise.all([
+      callPollyAPI(text, voiceId, 'json', ['viseme'], region, accessKeyId, secretAccessKey),
+      callPollyAPI(text, voiceId, 'mp3', [], region, accessKeyId, secretAccessKey)
+    ]);
     
-    const selectedVoiceId = voiceMap[voiceId] || voiceMap['indonesian-male'];
-    
-    // Call ElevenLabs API
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': apiKey
-      },
-      body: JSON.stringify({
-        text: text,
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75
-        }
-      })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`ElevenLabs API error: ${response.status} ${response.statusText}`);
+    if (audioData && visemeData) {
+      const visemes = parseVisemes(visemeData);
+      const audioBase64 = arrayBufferToBase64(audioData);
+      const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
+      
+      return {
+        audio: audioDataUrl,
+        visemes: visemes,
+        duration: calculateDuration(visemes)
+      };
     }
     
-    const audioBuffer = await response.arrayBuffer();
-    const audioBase64 = arrayBufferToBase64(audioBuffer);
-    const audioDataUrl = `data:audio/mpeg;base64,${audioBase64}`;
-    
-    // Generate mock visemes for lip sync (since ElevenLabs doesn't provide visemes)
-    const visemes = generateMockVisemes(text);
-    
-    return {
-      audio: audioDataUrl,
-      visemes: visemes,
-      duration: calculateDuration(visemes)
-    };
+    return null;
     
   } catch (error) {
-    console.error('ElevenLabs TTS error:', error);
+    console.error('AWS Polly error:', error);
     return null;
   }
 }
 
+// Call AWS Polly API with proper signature
+async function callPollyAPI(text, voiceId, outputFormat, speechMarkTypes, region, accessKeyId, secretAccessKey) {
+  const service = 'polly';
+  const host = `${service}.${region}.amazonaws.com`;
+  const endpoint = `https://${host}/v1/speech`;
+  
+  const payload = {
+    Text: text,
+    OutputFormat: outputFormat,
+    VoiceId: voiceId,
+    Engine: 'neural'
+  };
+  
+  if (speechMarkTypes.length > 0) {
+    payload.SpeechMarkTypes = speechMarkTypes;
+  }
+  
+  const headers = {
+    'Content-Type': 'application/x-amz-json-1.0',
+    'Host': host
+  };
+  
+  const signedHeaders = await signAWSRequest(
+    'POST',
+    endpoint,
+    headers,
+    JSON.stringify(payload),
+    region,
+    service,
+    accessKeyId,
+    secretAccessKey
+  );
+  
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: signedHeaders,
+    body: JSON.stringify(payload)
+  });
+  
+  if (!response.ok) {
+    throw new Error(`AWS Polly API error: ${response.status}`);
+  }
+  
+  if (outputFormat === 'mp3') {
+    return await response.arrayBuffer();
+  } else {
+    return await response.text();
+  }
+}
 
-// Convert ArrayBuffer to base64 (same as before)
+// AWS Signature V4 implementation
+async function signAWSRequest(method, url, headers, payload, region, service, accessKeyId, secretAccessKey) {
+  const urlObj = new URL(url);
+  const host = urlObj.hostname;
+  const path = urlObj.pathname;
+  
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.substr(0, 8);
+  
+  const algorithm = 'AWS4-HMAC-SHA256';
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+  
+  const canonicalHeaders = `host:${host}\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-date';
+  
+  const payloadHash = await sha256(payload);
+  const canonicalRequest = `${method}\n${path}\n\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
+  
+  const stringToSign = `${algorithm}\n${amzDate}\n${credentialScope}\n${await sha256(canonicalRequest)}`;
+  
+  const kDate = await hmacSha256(dateStamp, `AWS4${secretAccessKey}`);
+  const kRegion = await hmacSha256(region, kDate);
+  const kService = await hmacSha256(service, kRegion);
+  const kSigning = await hmacSha256('aws4_request', kService);
+  
+  const signature = await hmacSha256(stringToSign, kSigning, 'hex');
+  
+  const authorization = `${algorithm} Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  
+  return {
+    ...headers,
+    'Authorization': authorization,
+    'X-Amz-Date': amzDate
+  };
+}
+
+// Crypto helper functions
+async function sha256(data) {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function hmacSha256(data, key, encoding = 'raw') {
+  const encoder = new TextEncoder();
+  const keyBuffer = typeof key === 'string' ? encoder.encode(key) : key;
+  const dataBuffer = encoder.encode(data);
+  
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    keyBuffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const signature = await crypto.subtle.sign('HMAC', cryptoKey, dataBuffer);
+  
+  if (encoding === 'hex') {
+    const hashArray = Array.from(new Uint8Array(signature));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  
+  return signature;
+}
+
+// Convert ArrayBuffer to base64
 function arrayBufferToBase64(buffer) {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -168,7 +237,7 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-// Parse viseme data from AWS Polly (same as before)
+// Parse viseme data from AWS Polly
 function parseVisemes(visemeData) {
   try {
     const lines = visemeData.trim().split('\n');
@@ -185,100 +254,8 @@ function parseVisemes(visemeData) {
   }
 }
 
-// Calculate approximate duration (same as before)
+// Calculate approximate duration
 function calculateDuration(visemes) {
   if (visemes.length === 0) return 0;
   return Math.max(...visemes.map(v => v.time)) + 0.5;
-}
-
-// Generate mock visemes for lip sync
-function generateMockVisemes(text) {
-  const visemes = [];
-  const words = text.split(' ');
-  let currentTime = 0;
-  
-  // Start with silence
-  visemes.push({
-    time: 0,
-    viseme: 'sil'
-  });
-  
-  words.forEach((word, wordIndex) => {
-    // Add silence before each word (except first)
-    if (wordIndex > 0) {
-      visemes.push({
-        time: currentTime,
-        viseme: 'sil'
-      });
-      currentTime += 0.05; // Short pause
-    }
-    
-    // Process each letter in the word
-    const letters = word.toLowerCase().split('');
-    const letterDuration = Math.max(0.08, Math.min(0.15, 0.5 / letters.length)); // Dynamic timing
-    
-    letters.forEach((letter, letterIndex) => {
-      const viseme = getVisemeForLetter(letter);
-      
-      visemes.push({
-        time: currentTime,
-        viseme: viseme
-      });
-      
-      // Add transition viseme for smoother animation
-      if (letterIndex < letters.length - 1) {
-        const nextViseme = getVisemeForLetter(letters[letterIndex + 1]);
-        if (viseme !== nextViseme) {
-          visemes.push({
-            time: currentTime + letterDuration * 0.7,
-            viseme: getTransitionViseme(viseme, nextViseme)
-          });
-        }
-      }
-      
-      currentTime += letterDuration;
-    });
-    
-    // Add pause between words
-    currentTime += 0.1;
-  });
-  
-  // End with silence
-  visemes.push({
-    time: currentTime,
-    viseme: 'sil'
-  });
-  
-  return visemes;
-}
-
-// Get transition viseme for smoother mouth movement
-function getTransitionViseme(from, to) {
-  // Simple transition logic - can be enhanced
-  if (from === 'sil' || to === 'sil') return 'sil';
-  if (from === to) return from;
-  
-  // Vowel to vowel transitions
-  if (['a', 'e', 'i', 'o', 'u'].includes(from) && ['a', 'e', 'i', 'o', 'u'].includes(to)) {
-    return '@'; // Neutral vowel
-  }
-  
-  return 'sil'; // Default transition
-}
-
-// Map letters to visemes for lip sync (matching frontend format)
-function getVisemeForLetter(letter) {
-  const visemeMap = {
-    'a': 'a', 'e': 'e', 'i': 'i', 'o': 'o', 'u': 'u',
-    'b': 'p', 'p': 'p', 'm': 'p',
-    'f': 'f', 'v': 'f',
-    'd': 't', 't': 't', 'n': 't', 'l': 't',
-    'k': 'k', 'g': 'k',
-    'j': 'S', 'ch': 'S', 'sh': 'S',
-    'r': 'r',
-    's': 's', 'z': 's', 'c': 's',
-    'w': '@', 'qu': '@'
-  };
-  
-  return visemeMap[letter] || 'sil';
 }

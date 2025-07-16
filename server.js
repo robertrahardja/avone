@@ -39,10 +39,10 @@ app.get('/', (req, res) => {
     res.sendFile(join(__dirname, 'index.html'));
 });
 
-// Chat endpoint with OpenAI integration and Indonesian support
+// Chat endpoint with OpenAI integration
 app.post('/api/chat', async (req, res) => {
     try {
-        const { message, language = 'id' } = req.body; // Default to Indonesian
+        const { message } = req.body;
         
         if (!message) {
             return res.status(400).json({ error: 'Message is required' });
@@ -53,16 +53,12 @@ app.post('/api/chat', async (req, res) => {
         // Use OpenAI if available
         if (openai) {
             try {
-                const systemPrompt = language === 'id' 
-                    ? 'Anda adalah asisten AI yang ramah. Jawab dalam bahasa Indonesia dengan singkat (1-2 kalimat) dan percakapan yang natural.'
-                    : 'You are a friendly AI assistant. Keep responses concise (1-2 sentences) and conversational.';
-
                 const completion = await openai.chat.completions.create({
                     model: "gpt-3.5-turbo",
                     messages: [
                         {
                             role: "system",
-                            content: systemPrompt
+                            content: "You are a friendly AI assistant. Keep responses concise (1-2 sentences) and conversational."
                         },
                         {
                             role: "user",
@@ -77,17 +73,16 @@ app.post('/api/chat', async (req, res) => {
                 
             } catch (openaiError) {
                 console.error('OpenAI error:', openaiError.message);
-                response = getFallbackResponse(message, language);
+                response = getFallbackResponse(message);
             }
         } else {
-            response = getFallbackResponse(message, language);
+            response = getFallbackResponse(message);
         }
         
         res.json({ 
             response,
             timestamp: new Date().toISOString(),
-            source: openai ? 'openai' : 'fallback',
-            language
+            source: openai ? 'openai' : 'fallback'
         });
         
     } catch (error) {
@@ -96,37 +91,85 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// Text-to-speech endpoint with viseme support and Indonesian voices
+// Text-to-speech endpoint with viseme support
 app.post('/api/speak', async (req, res) => {
     try {
-        const { text, voice, voiceId, VoiceId, gender, language = 'id' } = req.body;
+        const { text, voice, voiceId, VoiceId, gender } = req.body;
         
         if (!text) {
             return res.status(400).json({ error: 'Text is required' });
         }
         
-        // Indonesian voice selection
-        let selectedVoice = getIndonesianVoice(voice, voiceId, VoiceId, gender, language);
+        // Determine voice to use (prioritize male voices)
+        let selectedVoice = 'Matthew'; // Default male voice
+        
+        if (voice) selectedVoice = voice;
+        if (voiceId) selectedVoice = voiceId;
+        if (VoiceId) selectedVoice = VoiceId;
         
         
-        // Try ElevenLabs TTS first for Indonesian support
-        if (process.env.ELEVENLABS_API_KEY) {
+        // Try AWS Polly first with viseme data
+        if (pollyClient) {
             try {
-                const elevenLabsResult = await callElevenLabsTTS(text, selectedVoice, language);
-                
-                if (elevenLabsResult) {
+                // Get viseme data
+                const visemeParams = {
+                    Text: text,
+                    OutputFormat: 'json',
+                    VoiceId: selectedVoice,
+                    Engine: 'neural',
+                    SpeechMarkTypes: ['viseme']
+                };
+
+                // Get audio data
+                const audioParams = {
+                    Text: text,
+                    OutputFormat: 'mp3',
+                    VoiceId: selectedVoice,
+                    Engine: 'neural'
+                };
+
+                // Execute both requests in parallel
+                const [visemeCommand, audioCommand] = [
+                    new SynthesizeSpeechCommand(visemeParams),
+                    new SynthesizeSpeechCommand(audioParams)
+                ];
+
+                const [visemeData, audioData] = await Promise.all([
+                    pollyClient.send(visemeCommand),
+                    pollyClient.send(audioCommand)
+                ]);
+
+                if (audioData.AudioStream && visemeData.AudioStream) {
+                    // Process audio
+                    const audioChunks = [];
+                    for await (const chunk of audioData.AudioStream) {
+                        audioChunks.push(chunk);
+                    }
+                    const audioBuffer = Buffer.concat(audioChunks);
+                    
+                    // Process visemes
+                    const visemeChunks = [];
+                    for await (const chunk of visemeData.AudioStream) {
+                        visemeChunks.push(chunk);
+                    }
+                    const visemeBuffer = Buffer.concat(visemeChunks);
+                    const visemes = parseVisemes(visemeBuffer.toString());
+                    
+                    // Convert audio to base64
+                    const audioBase64 = audioBuffer.toString('base64');
+                    const audioDataUrl = `data:audio/mp3;base64,${audioBase64}`;
+
+
                     res.json({
-                        audio: elevenLabsResult.audio,
-                        visemes: elevenLabsResult.visemes,
-                        duration: elevenLabsResult.duration,
-                        voice: selectedVoice,
-                        language: language,
-                        provider: 'elevenlabs'
+                        audio: audioDataUrl,
+                        visemes: visemes,
+                        duration: calculateDuration(visemes),
+                        voice: selectedVoice
                     });
                     return;
                 }
-            } catch (elevenLabsError) {
-                console.error('ElevenLabs error:', elevenLabsError.message);
+            } catch (pollyError) {
+                console.error('AWS Polly error:', pollyError.message);
                 // Fall through to browser TTS
             }
         }
@@ -135,9 +178,7 @@ app.post('/api/speak', async (req, res) => {
         res.json({ 
             useBrowserTTS: true,
             text: text,
-            voice: selectedVoice,
-            language: language,
-            message: `Using browser text-to-speech for ${language === 'id' ? 'Indonesian' : 'English'}`
+            message: 'Using browser text-to-speech'
         });
         
     } catch (error) {
@@ -169,246 +210,38 @@ function calculateDuration(visemes) {
     return Math.max(...visemes.map(v => v.time)) + 0.5;
 }
 
-// Select appropriate voice for language
-function getIndonesianVoice(voice, voiceId, VoiceId, gender, language) {
-    // If specific voice provided, use it
-    if (voice) return voice;
-    if (voiceId) return voiceId;
-    if (VoiceId) return VoiceId;
-    
-    // ElevenLabs supports Indonesian directly
-    if (language === 'id') {
-        // Use Indonesian voices for Indonesian
-        if (gender === 'male' || !gender) {
-            return 'andi'; // Andi - Indonesian Male voice
-        } else {
-            return 'indonesian-female'; // ElevenLabs Indonesian Female voice
-        }
-    } else {
-        // Default English voices for ElevenLabs
-        if (gender === 'male' || !gender) {
-            return 'adam'; // ElevenLabs English Male
-        } else {
-            return 'rachel'; // ElevenLabs English Female
-        }
-    }
-}
-
-// ElevenLabs TTS integration
-async function callElevenLabsTTS(text, voiceId, language) {
-    try {
-        const apiKey = process.env.ELEVENLABS_API_KEY;
-        
-        // Map voice names to actual ElevenLabs voice IDs
-        const voiceMap = {
-            'indonesian-male': 'TMvmhlKUioQA4U7LOoko', // Andi - Indonesian male voice
-            'andi': 'TMvmhlKUioQA4U7LOoko', // Direct Andi voice mapping
-            'indonesian-female': 'AZnzlk1XvdvUeBnXmlld', // Default female voice
-            'adam': 'pNInz6obpgDQGcFmaJgB', // Adam (male)
-            'rachel': 'AZnzlk1XvdvUeBnXmlld' // Rachel (female)
-        };
-        
-        const selectedVoiceId = voiceMap[voiceId] || voiceMap['indonesian-male'];
-        
-        // Call ElevenLabs API
-        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`, {
-            method: 'POST',
-            headers: {
-                'Accept': 'audio/mpeg',
-                'Content-Type': 'application/json',
-                'xi-api-key': apiKey
-            },
-            body: JSON.stringify({
-                text: text,
-                model_id: 'eleven_multilingual_v2',
-                voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75
-                }
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`ElevenLabs API error: ${response.status} ${response.statusText}`);
-        }
-        
-        const audioBuffer = await response.arrayBuffer();
-        const audioBase64 = Buffer.from(audioBuffer).toString('base64');
-        const audioDataUrl = `data:audio/mpeg;base64,${audioBase64}`;
-        
-        // Generate mock visemes for lip sync (since ElevenLabs doesn't provide visemes)
-        const visemes = generateMockVisemes(text);
-        
-        return {
-            audio: audioDataUrl,
-            visemes: visemes,
-            duration: calculateDuration(visemes)
-        };
-        
-    } catch (error) {
-        console.error('ElevenLabs TTS error:', error);
-        return null;
-    }
-}
-
-// Generate mock visemes for lip sync
-function generateMockVisemes(text) {
-    const visemes = [];
-    const words = text.split(' ');
-    let currentTime = 0;
-    
-    // Start with silence
-    visemes.push({
-        time: 0,
-        viseme: 'sil'
-    });
-    
-    words.forEach((word, wordIndex) => {
-        // Add silence before each word (except first)
-        if (wordIndex > 0) {
-            visemes.push({
-                time: currentTime,
-                viseme: 'sil'
-            });
-            currentTime += 0.05; // Short pause
-        }
-        
-        // Process each letter in the word
-        const letters = word.toLowerCase().split('');
-        const letterDuration = Math.max(0.08, Math.min(0.15, 0.5 / letters.length)); // Dynamic timing
-        
-        letters.forEach((letter, letterIndex) => {
-            const viseme = getVisemeForLetter(letter);
-            
-            visemes.push({
-                time: currentTime,
-                viseme: viseme
-            });
-            
-            // Add transition viseme for smoother animation
-            if (letterIndex < letters.length - 1) {
-                const nextViseme = getVisemeForLetter(letters[letterIndex + 1]);
-                if (viseme !== nextViseme) {
-                    visemes.push({
-                        time: currentTime + letterDuration * 0.7,
-                        viseme: getTransitionViseme(viseme, nextViseme)
-                    });
-                }
-            }
-            
-            currentTime += letterDuration;
-        });
-        
-        // Add pause between words
-        currentTime += 0.1;
-    });
-    
-    // End with silence
-    visemes.push({
-        time: currentTime,
-        viseme: 'sil'
-    });
-    
-    return visemes;
-}
-
-// Get transition viseme for smoother mouth movement
-function getTransitionViseme(from, to) {
-    // Simple transition logic - can be enhanced
-    if (from === 'sil' || to === 'sil') return 'sil';
-    if (from === to) return from;
-    
-    // Vowel to vowel transitions
-    if (['a', 'e', 'i', 'o', 'u'].includes(from) && ['a', 'e', 'i', 'o', 'u'].includes(to)) {
-        return '@'; // Neutral vowel
-    }
-    
-    return 'sil'; // Default transition
-}
-
-// Map letters to visemes for lip sync (matching frontend format)
-function getVisemeForLetter(letter) {
-    const visemeMap = {
-        'a': 'a', 'e': 'e', 'i': 'i', 'o': 'o', 'u': 'u',
-        'b': 'p', 'p': 'p', 'm': 'p',
-        'f': 'f', 'v': 'f',
-        'd': 't', 't': 't', 'n': 't', 'l': 't',
-        'k': 'k', 'g': 'k',
-        'j': 'S', 'ch': 'S', 'sh': 'S',
-        'r': 'r',
-        's': 's', 'z': 's', 'c': 's',
-        'w': '@', 'qu': '@'
-    };
-    
-    return visemeMap[letter] || 'sil';
-}
-
-// Fallback responses in multiple languages
-function getFallbackResponse(message, language = 'id') {
+// Fallback responses when OpenAI is not available
+function getFallbackResponse(message) {
     const responses = {
-        id: { // Indonesian
-            greeting: [
-                "Halo! Bagaimana saya bisa membantu Anda hari ini?",
-                "Hai! Apa yang ingin Anda bicarakan?",
-                "Hey! Saya di sini untuk membantu apa pun yang Anda butuhkan."
-            ],
-            question: [
-                "Itu pertanyaan yang bagus! Biarkan saya memikirkannya.",
-                "Menarik! Saya akan senang membantu dengan itu.",
-                "Pertanyaan yang baik! Ini yang saya pikirkan..."
-            ],
-            general: [
-                "Saya mengerti apa yang Anda katakan.",
-                "Itu sangat menarik!",
-                "Ceritakan lebih lanjut tentang itu.",
-                "Saya mengerti maksud Anda.",
-                "Itu masuk akal bagi saya."
-            ]
-        },
-        en: { // English
-            greeting: [
-                "Hello! How can I help you today?",
-                "Hi there! What would you like to chat about?",
-                "Hey! I'm here to help with whatever you need."
-            ],
-            question: [
-                "That's a great question! Let me think about that.",
-                "Interesting! I'd be happy to help with that.",
-                "Good question! Here's what I think..."
-            ],
-            general: [
-                "I understand what you're saying.",
-                "That's really interesting!",
-                "Tell me more about that.",
-                "I see what you mean.",
-                "That makes sense to me."
-            ]
-        }
+        greeting: [
+            "Hello! How can I help you today?",
+            "Hi there! What would you like to chat about?",
+            "Hey! I'm here to help with whatever you need."
+        ],
+        question: [
+            "That's a great question! Let me think about that.",
+            "Interesting! I'd be happy to help with that.",
+            "Good question! Here's what I think..."
+        ],
+        general: [
+            "I understand what you're saying.",
+            "That's really interesting!",
+            "Tell me more about that.",
+            "I see what you mean.",
+            "That makes sense to me."
+        ]
     };
     
-    const langResponses = responses[language] || responses.id;
     let responseType = 'general';
     const lowerMessage = message.toLowerCase();
     
-    // Indonesian greeting detection
-    if (language === 'id') {
-        if (lowerMessage.includes('halo') || lowerMessage.includes('hai') || 
-            lowerMessage.includes('selamat') || lowerMessage.includes('hello')) {
-            responseType = 'greeting';
-        } else if (lowerMessage.includes('?') || lowerMessage.includes('apa') || 
-                   lowerMessage.includes('bagaimana') || lowerMessage.includes('kenapa')) {
-            responseType = 'question';
-        }
-    } else {
-        if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
-            responseType = 'greeting';
-        } else if (lowerMessage.includes('?') || lowerMessage.includes('how') || 
-                   lowerMessage.includes('what') || lowerMessage.includes('why')) {
-            responseType = 'question';
-        }
+    if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('hey')) {
+        responseType = 'greeting';
+    } else if (lowerMessage.includes('?') || lowerMessage.includes('how') || lowerMessage.includes('what') || lowerMessage.includes('why')) {
+        responseType = 'question';
     }
     
-    const responseArray = langResponses[responseType];
+    const responseArray = responses[responseType];
     return responseArray[Math.floor(Math.random() * responseArray.length)];
 }
 
