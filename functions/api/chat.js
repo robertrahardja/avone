@@ -8,7 +8,7 @@ export async function onRequestPost(context) {
   };
 
   try {
-    const { message, language = 'id' } = await context.request.json(); // Default to Indonesian
+    const { message, language = 'en' } = await context.request.json(); // Default to English
     
     if (!message) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
